@@ -15,32 +15,32 @@ if TYPE_CHECKING:
     from sigmaloop.types import InstrumentId, OrderId, RejectReason, Symbol, UtcDatetime
 
 __all__ = [
-    "SigmaLoopError",
-    "ConfigurationError",
-    "ValidationError",
-    "PluginError",
-    "PluginNotFoundError",
-    "DuplicatePluginError",
-    "DataError",
-    "DataProviderError",
-    "DataNotAvailableError",
-    "InstrumentNotFoundError",
-    "OptionChainUnavailableError",
-    "DataIntegrityError",
-    "LookaheadViolationError",
-    "StrategyError",
-    "StrategyContractError",
-    "IndicatorError",
-    "InsufficientHistoryError",
-    "ExecutionError",
-    "OrderRejectedError",
     "AccountingError",
-    "InsufficientCapitalError",
-    "PositionNotFoundError",
-    "MetricError",
+    "ConfigurationError",
+    "DataError",
+    "DataIntegrityError",
+    "DataNotAvailableError",
+    "DataProviderError",
+    "DuplicatePluginError",
     "EngineError",
     "EngineStateError",
+    "ExecutionError",
+    "IndicatorError",
+    "InstrumentNotFoundError",
+    "InsufficientCapitalError",
+    "InsufficientHistoryError",
+    "LookaheadViolationError",
+    "MetricError",
+    "OptionChainUnavailableError",
+    "OrderRejectedError",
+    "PluginError",
+    "PluginNotFoundError",
+    "PositionNotFoundError",
     "RunCancelledError",
+    "SigmaLoopError",
+    "StrategyContractError",
+    "StrategyError",
+    "ValidationError",
 ]
 
 
@@ -53,7 +53,10 @@ class SigmaLoopError(Exception):
         self.context: dict[str, Any] = context
 
     def __str__(self) -> str:  # pragma: no cover - formatting only
-        raise NotImplementedError
+        if not self.context:
+            return self.message
+        detail = ", ".join(f"{k}={v!r}" for k, v in self.context.items() if v is not None)
+        return f"{self.message} ({detail})" if detail else self.message
 
 
 # --------------------------------------------------------------------------- #
@@ -102,7 +105,8 @@ class DataProviderError(DataError):
     """A provider failed to fetch (network, auth, rate limit, bad file)."""
 
     def __init__(self, provider: str, message: str, /, **context: Any) -> None:
-        raise NotImplementedError
+        super().__init__(f"[{provider}] {message}", provider=provider, **context)
+        self.provider = provider
 
 
 class DataNotAvailableError(DataError):
@@ -116,7 +120,19 @@ class DataNotAvailableError(DataError):
         /,
         **context: Any,
     ) -> None:
-        raise NotImplementedError
+        window = ""
+        if start is not None or end is not None:
+            window = f" in {start.isoformat() if start else '-inf'}..{end.isoformat() if end else '+inf'}"
+        super().__init__(
+            f"No data available for {symbol}{window}.",
+            symbol=symbol,
+            start=start,
+            end=end,
+            **context,
+        )
+        self.symbol = symbol
+        self.start = start
+        self.end = end
 
 
 class InstrumentNotFoundError(DataError):

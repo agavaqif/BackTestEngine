@@ -18,6 +18,7 @@ data/cache/
 runs/
 *.parquet
 *.feather
+.sigmaloop_cache/
 
 .DS_Store
 .idea/

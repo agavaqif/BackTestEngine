@@ -15,6 +15,8 @@ keywords = ["backtesting", "trading", "options", "quantitative-finance"]
 dependencies = [
     "numpy>=1.26",
     "pandas>=2.1",
+    # CSV parsing, the Parquet conversion cache and predicate pushdown.
+    "pyarrow>=14.0",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +59,12 @@ python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 disallow_any_generics = true
+
+# pyarrow ships no py.typed marker. It is used only inside the data layer, and
+# every value crossing back out is re-typed as a numpy array or a domain object.
+[[tool.mypy.overrides]]
+module = ["pyarrow.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

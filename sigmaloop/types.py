@@ -191,11 +191,44 @@ class Timeframe(StrEnum):
         Raises ``ValueError`` for ``TICK`` and for calendar-variable periods
         (``W1``/``MO1`` return their nominal 7d / 30d approximation).
         """
-        raise NotImplementedError
+        try:
+            return _TIMEFRAME_DURATION[self]
+        except KeyError:
+            raise ValueError(
+                f"{self.value!r} has no fixed duration; TICK bars are event-driven, "
+                "so no wall-clock width exists."
+            ) from None
 
     @property
     def is_intraday(self) -> bool:
-        raise NotImplementedError
+        return self in _INTRADAY_TIMEFRAMES
+
+
+_TIMEFRAME_DURATION: dict[Timeframe, timedelta] = {
+    Timeframe.S1: timedelta(seconds=1),
+    Timeframe.M1: timedelta(minutes=1),
+    Timeframe.M5: timedelta(minutes=5),
+    Timeframe.M15: timedelta(minutes=15),
+    Timeframe.M30: timedelta(minutes=30),
+    Timeframe.H1: timedelta(hours=1),
+    Timeframe.H4: timedelta(hours=4),
+    Timeframe.D1: timedelta(days=1),
+    Timeframe.W1: timedelta(days=7),
+    Timeframe.MO1: timedelta(days=30),
+}
+
+_INTRADAY_TIMEFRAMES: frozenset[Timeframe] = frozenset(
+    {
+        Timeframe.TICK,
+        Timeframe.S1,
+        Timeframe.M1,
+        Timeframe.M5,
+        Timeframe.M15,
+        Timeframe.M30,
+        Timeframe.H1,
+        Timeframe.H4,
+    }
+)
 
 
 # --------------------------------------------------------------------------- #

@@ -7,11 +7,13 @@ a portfolio-mode run may hold hundreds of thousands of option contracts).
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date
 from typing import ClassVar
 
+from sigmaloop.errors import ValidationError
 from sigmaloop.types import (
     AssetClass,
     Currency,
@@ -26,11 +28,19 @@ from sigmaloop.types import (
 )
 
 __all__ = [
-    "Instrument",
     "Equity",
-    "OptionContract",
+    "Instrument",
     "InstrumentRegistry",
+    "OptionContract",
 ]
+
+#: Decimal places kept when snapping to a tick / lot. Ten is far beyond any
+#: real tick size and well inside float64's ~15 significant digits.
+_PRICE_DECIMALS = 10
+_QUANTITY_DECIMALS = 10
+#: Absorbs the representation error in e.g. 0.3 / 0.1 == 2.9999999999999996,
+#: which would otherwise floor a clean 3 lots down to 2.
+_LOT_EPSILON = 1e-9
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -78,7 +88,28 @@ class Instrument(ABC):
 
     def __post_init__(self) -> None:
         """Validate invariants (positive multiplier/tick, non-empty symbol)."""
-        raise NotImplementedError
+        if not self.symbol or not self.symbol.strip():
+            raise ValidationError("Instrument.symbol must be a non-empty ticker.")
+        if not self.instrument_id:
+            raise ValidationError("Instrument.instrument_id must be non-empty.", symbol=self.symbol)
+        if self.multiplier <= 0:
+            raise ValidationError(
+                "Instrument.multiplier must be positive.",
+                symbol=self.symbol,
+                multiplier=self.multiplier,
+            )
+        if self.tick_size <= 0:
+            raise ValidationError(
+                "Instrument.tick_size must be positive.",
+                symbol=self.symbol,
+                tick_size=self.tick_size,
+            )
+        if self.lot_size <= 0:
+            raise ValidationError(
+                "Instrument.lot_size must be positive.",
+                symbol=self.symbol,
+                lot_size=self.lot_size,
+            )
 
     @abstractmethod
     def notional(self, price: Price, quantity: Quantity) -> float:
@@ -92,11 +123,16 @@ class Instrument(ABC):
 
     def round_price(self, price: Price) -> Price:
         """Snap ``price`` to the nearest valid tick."""
-        raise NotImplementedError
+        ticks = round(price / self.tick_size)
+        # Re-round the product: tick sizes such as 0.01 are not exactly
+        # representable, so ticks * tick_size drifts into the 1e-17 range.
+        return round(ticks * self.tick_size, _PRICE_DECIMALS)
 
     def round_quantity(self, quantity: Quantity) -> Quantity:
         """Floor ``quantity`` (toward zero) to a valid lot multiple."""
-        raise NotImplementedError
+        lots = math.floor(abs(quantity) / self.lot_size + _LOT_EPSILON)
+        magnitude = round(lots * self.lot_size, _QUANTITY_DECIMALS)
+        return -magnitude if quantity < 0 else magnitude
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -114,13 +150,13 @@ class Equity(Instrument):
     @classmethod
     def make_id(cls, symbol: Symbol) -> InstrumentId:
         """Build ``"EQ:<SYMBOL>"``."""
-        raise NotImplementedError
+        return InstrumentId(f"{cls.ID_PREFIX}:{symbol.strip().upper()}")
 
     def notional(self, price: Price, quantity: Quantity) -> float:
-        raise NotImplementedError
+        return price * quantity * self.multiplier
 
     def is_expired(self, as_of: UtcDatetime) -> bool:
-        raise NotImplementedError
+        return self.delisted_on is not None and as_of.date() >= self.delisted_on
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

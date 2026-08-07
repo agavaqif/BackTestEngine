@@ -24,6 +24,7 @@ from typing import ClassVar
 from sigmaloop.domain.account import CorporateAction
 from sigmaloop.domain.bar import Bar, BarSeries, OptionChain
 from sigmaloop.domain.instrument import Instrument, OptionContract
+from sigmaloop.errors import ValidationError
 from sigmaloop.types import (
     AssetClass,
     OptionRight,
@@ -32,14 +33,15 @@ from sigmaloop.types import (
     Timeframe,
     UtcDatetime,
 )
+from sigmaloop.utils.timeutil import ensure_utc
 
 __all__ = [
+    "CompositeDataProvider",
+    "DataProvider",
     "DataRequest",
     "OptionChainRequest",
-    "ProviderCapabilities",
-    "DataProvider",
     "OptionsDataProvider",
-    "CompositeDataProvider",
+    "ProviderCapabilities",
 ]
 
 
@@ -59,8 +61,33 @@ class DataRequest:
     warmup_bars: int = 0
 
     def __post_init__(self) -> None:
-        """Validate ``start < end``, non-empty symbols, tz-aware bounds."""
-        raise NotImplementedError
+        """Validate ``start < end``, non-empty symbols, tz-aware bounds.
+
+        Also normalises: symbols are coerced to an upper-cased tuple and the
+        bounds to UTC, so two requests that differ only in spelling or in the
+        caller's local timezone hash equal and share one cache entry.
+        """
+        symbols = tuple(dict.fromkeys(Symbol(str(s).strip().upper()) for s in self.symbols))
+        if not symbols or any(not s for s in symbols):
+            raise ValidationError(
+                "DataRequest.symbols must contain at least one non-empty ticker.",
+                symbols=self.symbols,
+            )
+        start = ensure_utc(self.start)
+        end = ensure_utc(self.end)
+        if start >= end:
+            raise ValidationError(
+                "DataRequest.start must be strictly before end.",
+                start=start.isoformat(),
+                end=end.isoformat(),
+            )
+        if self.warmup_bars < 0:
+            raise ValidationError(
+                "DataRequest.warmup_bars cannot be negative.", warmup_bars=self.warmup_bars
+            )
+        object.__setattr__(self, "symbols", symbols)
+        object.__setattr__(self, "start", start)
+        object.__setattr__(self, "end", end)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +166,7 @@ class DataProvider(ABC):
 
     def coverage(self, symbol: Symbol, timeframe: Timeframe) -> tuple[UtcDatetime, UtcDatetime] | None:
         """First and last available timestamps, if cheaply knowable."""
-        raise NotImplementedError
+        return None
 
     # ---- bar access -------------------------------------------------------- #
 
@@ -160,7 +187,7 @@ class DataProvider(ABC):
 
     def load_many(self, request: DataRequest) -> dict[Symbol, BarSeries]:
         """Batch form of :meth:`load_series`; override to exploit bulk endpoints."""
-        raise NotImplementedError
+        return {symbol: self.load_series(symbol, request) for symbol in request.symbols}
 
     # ---- corporate actions -------------------------------------------------- #
 
@@ -168,23 +195,22 @@ class DataProvider(ABC):
         self, symbol: Symbol, start: UtcDatetime, end: UtcDatetime
     ) -> Sequence[CorporateAction]:
         """Splits/dividends in range. Default: empty."""
-        raise NotImplementedError
+        return ()
 
     # ---- lifecycle ---------------------------------------------------------- #
 
     def open(self) -> None:
         """Acquire handles (file descriptors, HTTP sessions, credentials)."""
-        raise NotImplementedError
 
     def close(self) -> None:
         """Release resources. Always called by the engine, even on failure."""
-        raise NotImplementedError
 
     def __enter__(self) -> DataProvider:
-        raise NotImplementedError
+        self.open()
+        return self
 
     def __exit__(self, *exc: object) -> None:
-        raise NotImplementedError
+        self.close()
 
 
 class OptionsDataProvider(DataProvider):
