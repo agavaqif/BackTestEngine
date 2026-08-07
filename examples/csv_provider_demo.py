@@ -29,9 +29,8 @@ A real dataset is ONE shape, not a mixture. The two that matter are covered
 separately below: a directory of per-session OHLC aggregates (parts 2-5), and a
 directory of nothing but bid/ask (part 6).
 
-MergedDataFeed and BacktestEngine are still NotImplementedError stubs, so part 7
-stands in for the feed with the handful of lines that matter. Everything else
-runs against the real provider.
+BacktestEngine is still a NotImplementedError stub; everything else here — the
+provider and the MergedDataFeed in part 7 — is the real thing.
 """
 
 from __future__ import annotations
@@ -43,14 +42,14 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Iterable, Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from sigmaloop.data.feed import FeedPlan
+from sigmaloop.data.calendar import NyseCalendar
+from sigmaloop.data.feed import FeedPlan, MergedDataFeed
 from sigmaloop.data.provider import DataRequest
 from sigmaloop.data.providers.csv_provider import CsvDataProvider, CsvProviderConfig
-from sigmaloop.domain.bar import Bar, MarketSnapshot, Quote
+from sigmaloop.domain.bar import Bar, Quote
 from sigmaloop.types import AssetClass, PriceSelection, Symbol, Timeframe
 
 REPO = Path(__file__).resolve().parents[1]
@@ -255,45 +254,41 @@ def part_6_quote_only(root: Path, cache: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def to_snapshots(bars: Iterable[Bar]) -> Iterator[MarketSnapshot]:
-    """Group a time-ordered bar stream into one MarketSnapshot per timestamp.
-
-    This is the core of MergedDataFeed. The real one additionally heap-merges
-    several providers' iterators and attaches option chains; with a single
-    provider the stream is already globally ordered, so grouping is enough.
-
-    A snapshot is a *closed world*: an instrument absent from ``bars`` did not
-    trade at this timestamp, and an order against it is rejected with
-    NO_MARKET_DATA rather than filled at a stale price.
-    """
-    for timestamp, group in itertools.groupby(bars, key=lambda b: b.timestamp):
-        yield MarketSnapshot(timestamp=timestamp, bars={b.instrument_id: b for b in group})
-
-
 def part_7_the_feed(root: Path, cache: Path) -> None:
-    banner("7. The feed's job — bars become one MarketSnapshot per timestamp")
+    banner("7. MergedDataFeed — bars become one MarketSnapshot per timestamp")
 
-    with CsvDataProvider(
+    provider = CsvDataProvider(
         CsvProviderConfig(path=root, cache_dir=cache, source_timezone="UTC")
-    ) as provider:
-        request = DataRequest(
-            symbols=(Symbol("MSFT"), Symbol("AAPL"), Symbol("NVDA")),
-            start=datetime(2024, 1, 2, tzinfo=UTC),
-            end=datetime(2024, 1, 10, tzinfo=UTC),
-            timeframe=Timeframe.D1,
-        )
+    )
+    request = DataRequest(
+        symbols=(Symbol("MSFT"), Symbol("AAPL"), Symbol("NVDA")),
+        start=datetime(2024, 1, 2, tzinfo=UTC),
+        end=datetime(2024, 1, 10, tzinfo=UTC),
+        timeframe=Timeframe.D1,
+    )
+    plan = FeedPlan(bar_requests=(request,), timeframe=Timeframe.D1)
+    feed = MergedDataFeed(plan, [provider], calendar=NyseCalendar())
+    try:
         print(
             f"  universe {request.symbols} over {len(list(root.glob('*.csv')))} per-session files\n"
         )
         print("  timestamp            instruments in snapshot                 closes")
-        for snapshot in itertools.islice(to_snapshots(provider.stream_bars(request)), 5):
+        for snapshot in itertools.islice(feed, 5):
             names = ", ".join(sorted(snapshot.bars))
             closes = " ".join(f"{b.close:7.2f}" for _, b in sorted(snapshot.bars.items()))
             print(f"  {snapshot.timestamp:%Y-%m-%d %H:%M}    {names:38s} {closes}")
 
+        print(f"\n  instruments resolved up front: {[i.instrument_id for i in feed.instruments()]}")
+        print("\n  A snapshot is a CLOSED WORLD: an instrument absent from `bars` did not")
+        print("  trade at this timestamp, and an order against it is rejected with")
+        print("  NO_MARKET_DATA rather than filled at a stale price.")
+        print("\n  Residency is O(sources), not O(history): the heap holds one pending bar")
+        print("  per stream and nothing else, so a ten-year run costs what a ten-day one does.")
         print("\n  The engine then runs each snapshot through its 13 phases. Everything")
         print("  downstream sees exactly one timestamp at a time — that is the structural")
         print("  guarantee against lookahead, not a convention anyone has to remember.")
+    finally:
+        feed.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -457,10 +452,10 @@ def main() -> int:
         part_8_pruning_and_cache(sessions, workdir / "pruning")
 
         banner("Summary")
-        print("  MergedDataFeed  consumes stream_bars() and emits MarketSnapshots  [still a stub]")
+        print("  MergedDataFeed  consumes stream_bars() and emits MarketSnapshots  [implemented]")
         print("  BacktestEngine  consumes those snapshots, 13 phases per bar       [still a stub]")
         print("  Indicators      consume load_series() / load_many() columnar      [still a stub]")
-        print("\n  The provider is complete and is what all three will call.")
+        print("\n  The provider and the feed are complete; the engine is what consumes them.")
         return 0
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

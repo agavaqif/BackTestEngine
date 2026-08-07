@@ -143,3 +143,22 @@ def long_layout(tmp_path: Path, days: list[date]) -> Path:
         root / "universe.csv", index=False
     )
     return root
+
+
+#: Sessions AAPL sits out in :func:`ragged_layout` — indices into ``days``.
+AAPL_ABSENT = (0, 5, 6, 19)
+
+
+@pytest.fixture
+def ragged_layout(tmp_path: Path, days: list[date]) -> Path:
+    """Two tickers whose trading days do not line up.
+
+    A halted, pre-listing or delisted name simply has no bar, and the feed must
+    represent that as absence rather than as a stale repeat of yesterday.
+    """
+    root = tmp_path / "ragged"
+    root.mkdir()
+    aapl_days = [day for index, day in enumerate(days) if index not in AAPL_ABSENT]
+    daily_frame("MSFT", days, 100).to_csv(root / "MSFT.csv", index=False)
+    daily_frame("AAPL", aapl_days, 200).to_csv(root / "AAPL.csv", index=False)
+    return root

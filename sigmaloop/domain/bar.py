@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
-from sigmaloop.errors import DataIntegrityError
+from sigmaloop.errors import DataIntegrityError, DataNotAvailableError
 from sigmaloop.types import (
     EpochNanos,
     InstrumentId,
@@ -32,7 +32,7 @@ from sigmaloop.types import (
     Timeframe,
     UtcDatetime,
 )
-from sigmaloop.utils.timeutil import from_epoch_ns, to_epoch_ns
+from sigmaloop.utils.timeutil import ensure_utc, from_epoch_ns, to_epoch_ns
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -332,25 +332,75 @@ class MarketSnapshot:
     is_session_open: bool = True
     is_session_close: bool = True
 
+    def __post_init__(self) -> None:
+        """Normalise the timestamp to tz-aware UTC.
+
+        One conversion per bar, not per instrument: a naive timestamp reaching
+        the clock would make every downstream comparison — visibility guards,
+        session boundaries, expiry — silently wrong by a whole timezone.
+        """
+        object.__setattr__(self, "timestamp", ensure_utc(self.timestamp))
+
     def bar(self, instrument_id: InstrumentId) -> Bar | None:
-        raise NotImplementedError
+        """The instrument's bar at this step, or ``None`` if it did not trade."""
+        return self.bars.get(instrument_id)
 
     def require_bar(self, instrument_id: InstrumentId) -> Bar:
         """Like :meth:`bar` but raises ``DataNotAvailableError`` when missing."""
-        raise NotImplementedError
+        found = self.bars.get(instrument_id)
+        if found is None:
+            raise DataNotAvailableError(
+                instrument_id,
+                timestamp=self.timestamp.isoformat(),
+                hint=(
+                    "The instrument is absent from this snapshot, so it did not trade at "
+                    "this step (holiday, halt, or outside its listing). Orders against it "
+                    "are rejected with NO_MARKET_DATA rather than filled at a stale price."
+                ),
+            )
+        return found
 
     def chain(self, underlying_id: InstrumentId) -> OptionChain | None:
-        raise NotImplementedError
+        return self.chains.get(underlying_id)
 
     def price(self, instrument_id: InstrumentId) -> Price | None:
-        """Mark price (close/mid) used for mark-to-market."""
-        raise NotImplementedError
+        """Mark price used for mark-to-market, or ``None`` if unobservable here.
+
+        Equity bars mark at the **close**, never at the attached quote's mid.
+        The mid is the better estimate of fair value *when the book is current*,
+        but :class:`Quote` carries no timestamp: a provider attaches the last
+        quote at or before the bar close, which on thin quote coverage can be
+        hours stale and is then carried forward unchanged. The close is
+        contemporaneous with the bar by construction, so it is never the older
+        of the two. Marking to a frozen book produces a flat equity curve while
+        the market moves — the failure is silent, and it would be toggled on by
+        ``DataRequest.include_quotes``, a flag that otherwise only *attaches*
+        information.
+
+        This costs nothing on quote-only datasets, where the derived OHLC
+        already tracks the mid. Execution is unaffected: fills price through
+        :meth:`Bar.price_for`, which uses the real book and is where spread
+        selection belongs. Should ``Quote`` ever grow an as-of timestamp, a
+        freshness test here could prefer a current mid again.
+        """
+        found = self.bars.get(instrument_id)
+        if found is not None:
+            return found.close
+        # Options are carried in chains, not bars. The scan is linear, but it
+        # runs only for instruments absent from `bars`, and `chains` is empty in
+        # every non-options run.
+        for chain in self.chains.values():
+            for option in chain.quotes:
+                if option.instrument_id == instrument_id:
+                    return option.quote.mid
+        return None
 
     def instruments(self) -> Sequence[InstrumentId]:
-        raise NotImplementedError
+        """Every instrument that traded at this step."""
+        return tuple(self.bars)
 
     def __len__(self) -> int:
-        raise NotImplementedError
+        return len(self.bars)
 
 
 class BarSeries:
