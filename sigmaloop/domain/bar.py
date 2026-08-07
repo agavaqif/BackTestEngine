@@ -19,6 +19,9 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+import numpy as np
+
+from sigmaloop.errors import DataIntegrityError
 from sigmaloop.types import (
     EpochNanos,
     InstrumentId,
@@ -29,22 +32,22 @@ from sigmaloop.types import (
     Timeframe,
     UtcDatetime,
 )
+from sigmaloop.utils.timeutil import from_epoch_ns, to_epoch_ns
 
 if TYPE_CHECKING:
-    import numpy as np
     import numpy.typing as npt
 
     from sigmaloop.domain.instrument import OptionContract
 
 __all__ = [
-    "Quote",
     "Bar",
-    "OptionQuote",
-    "Greeks",
-    "OptionChain",
-    "MarketSnapshot",
     "BarSeries",
+    "Greeks",
+    "MarketSnapshot",
+    "OptionChain",
+    "OptionQuote",
     "PricedInstrument",
+    "Quote",
 ]
 
 
@@ -83,16 +86,17 @@ class Quote:
 
     @property
     def mid(self) -> Price:
-        raise NotImplementedError
+        return (self.bid + self.ask) * 0.5
 
     @property
     def spread(self) -> Price:
-        raise NotImplementedError
+        return self.ask - self.bid
 
     @property
     def spread_pct(self) -> float:
         """Spread as a fraction of mid."""
-        raise NotImplementedError
+        mid = self.mid
+        return 0.0 if mid <= 0.0 else (self.ask - self.bid) / mid
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,24 +125,43 @@ class Bar:
 
     def __post_init__(self) -> None:
         """Validate ``low <= min(open, close) <= max(open, close) <= high``."""
-        raise NotImplementedError
+        low, high = self.low, self.high
+        # NaN in any field makes every comparison False, so this also rejects
+        # unparsed cells without a separate isnan check.
+        if not (low <= self.open <= high and low <= self.close <= high and low <= high):
+            raise DataIntegrityError(
+                "Bar violates low <= min(open, close) <= max(open, close) <= high.",
+                instrument_id=self.instrument_id,
+                timestamp=self.timestamp,
+                open=self.open,
+                high=self.high,
+                low=self.low,
+                close=self.close,
+            )
+        if self.volume < 0.0:
+            raise DataIntegrityError(
+                "Bar volume is negative.",
+                instrument_id=self.instrument_id,
+                timestamp=self.timestamp,
+                volume=self.volume,
+            )
 
     @property
     def epoch_ns(self) -> EpochNanos:
-        raise NotImplementedError
+        return to_epoch_ns(self.timestamp)
 
     @property
     def typical_price(self) -> Price:
         """``(high + low + close) / 3``."""
-        raise NotImplementedError
+        return (self.high + self.low + self.close) / 3.0
 
     @property
     def range(self) -> Price:
-        raise NotImplementedError
+        return self.high - self.low
 
     @property
     def is_up(self) -> bool:
-        raise NotImplementedError
+        return self.close > self.open
 
     def price_for(self, selection: PriceSelection, is_buy: bool) -> Price:
         """Transaction price under ``selection``.
@@ -148,7 +171,14 @@ class Bar:
         every selection degrades to ``close`` and the caller is expected to have
         applied a :class:`~sigmaloop.execution.pricing.SpreadModel` first.
         """
-        raise NotImplementedError
+        quote = self.quote
+        if quote is None or selection is PriceSelection.LAST:
+            return self.close
+        if selection is PriceSelection.MID:
+            return quote.mid
+        if selection is PriceSelection.WORST:
+            return quote.ask if is_buy else quote.bid
+        return quote.bid if is_buy else quote.ask
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,16 +365,16 @@ class BarSeries:
     """
 
     __slots__ = (
-        "instrument_id",
-        "timeframe",
-        "_ts",
-        "_open",
+        "_capacity",
+        "_close",
         "_high",
         "_low",
-        "_close",
-        "_volume",
+        "_open",
         "_size",
-        "_capacity",
+        "_ts",
+        "_volume",
+        "instrument_id",
+        "timeframe",
     )
 
     def __init__(
@@ -353,13 +383,69 @@ class BarSeries:
         timeframe: Timeframe,
         capacity: int = 1024,
     ) -> None:
-        raise NotImplementedError
+        cap = max(int(capacity), 1)
+        self.instrument_id = instrument_id
+        self.timeframe = timeframe
+        self._ts: npt.NDArray[np.int64] = np.empty(cap, dtype=np.int64)
+        self._open: npt.NDArray[np.float64] = np.empty(cap, dtype=np.float64)
+        self._high: npt.NDArray[np.float64] = np.empty(cap, dtype=np.float64)
+        self._low: npt.NDArray[np.float64] = np.empty(cap, dtype=np.float64)
+        self._close: npt.NDArray[np.float64] = np.empty(cap, dtype=np.float64)
+        self._volume: npt.NDArray[np.float64] = np.empty(cap, dtype=np.float64)
+        self._size = 0
+        self._capacity = cap
 
     # ---- construction ----------------------------------------------------- #
 
     @classmethod
+    def _adopt(
+        cls,
+        instrument_id: InstrumentId,
+        timeframe: Timeframe,
+        columns: tuple[
+            npt.NDArray[np.int64],
+            npt.NDArray[np.float64],
+            npt.NDArray[np.float64],
+            npt.NDArray[np.float64],
+            npt.NDArray[np.float64],
+            npt.NDArray[np.float64],
+        ],
+    ) -> BarSeries:
+        """Build a series that *references* ``columns`` without copying them.
+
+        Bypasses ``__init__``'s allocation; this is the primitive behind
+        :meth:`from_arrays`, :meth:`tail` and :meth:`slice`.
+        """
+        series = object.__new__(cls)
+        series.instrument_id = instrument_id
+        series.timeframe = timeframe
+        series._ts, series._open, series._high, series._low, series._close, series._volume = columns
+        series._size = columns[0].shape[0]
+        series._capacity = series._size
+        return series
+
+    @classmethod
     def from_bars(cls, bars: Sequence[Bar]) -> BarSeries:
-        raise NotImplementedError
+        if not bars:
+            raise DataIntegrityError("Cannot build a BarSeries from zero bars.")
+        first = bars[0]
+        count = len(bars)
+        ts = np.empty(count, dtype=np.int64)
+        opens = np.empty(count, dtype=np.float64)
+        highs = np.empty(count, dtype=np.float64)
+        lows = np.empty(count, dtype=np.float64)
+        closes = np.empty(count, dtype=np.float64)
+        volumes = np.empty(count, dtype=np.float64)
+        for i, bar in enumerate(bars):
+            ts[i] = to_epoch_ns(bar.timestamp)
+            opens[i] = bar.open
+            highs[i] = bar.high
+            lows[i] = bar.low
+            closes[i] = bar.close
+            volumes[i] = bar.volume
+        return cls._adopt(
+            first.instrument_id, first.timeframe, (ts, opens, highs, lows, closes, volumes)
+        )
 
     @classmethod
     def from_arrays(
@@ -374,55 +460,130 @@ class BarSeries:
         volumes: npt.NDArray[np.float64],
     ) -> BarSeries:
         """Zero-copy adoption of already-validated columns (fast CSV/Parquet path)."""
-        raise NotImplementedError
+        ts = np.asarray(timestamps, dtype=np.int64)
+        cols = tuple(np.asarray(c, dtype=np.float64) for c in (opens, highs, lows, closes, volumes))
+        for name, column in zip(("open", "high", "low", "close", "volume"), cols, strict=True):
+            if column.shape != ts.shape:
+                raise DataIntegrityError(
+                    f"Column {name!r} has length {column.shape[0]}, expected {ts.shape[0]}.",
+                    instrument_id=instrument_id,
+                )
+        return cls._adopt(instrument_id, timeframe, (ts, *cols))  # type: ignore[arg-type]
 
     def append(self, bar: Bar) -> None:
         """Append one bar, growing capacity geometrically when full."""
-        raise NotImplementedError
+        if self._size == self._capacity:
+            self._grow()
+        i = self._size
+        self._ts[i] = to_epoch_ns(bar.timestamp)
+        self._open[i] = bar.open
+        self._high[i] = bar.high
+        self._low[i] = bar.low
+        self._close[i] = bar.close
+        self._volume[i] = bar.volume
+        self._size = i + 1
+
+    def _grow(self) -> None:
+        new_cap = max(self._capacity * 2, 1)
+        self._ts = np.resize(self._ts, new_cap)
+        self._open = np.resize(self._open, new_cap)
+        self._high = np.resize(self._high, new_cap)
+        self._low = np.resize(self._low, new_cap)
+        self._close = np.resize(self._close, new_cap)
+        self._volume = np.resize(self._volume, new_cap)
+        self._capacity = new_cap
 
     # ---- column views (zero-copy) ------------------------------------------ #
 
     @property
     def timestamps(self) -> npt.NDArray[np.int64]:
         """Epoch-nanosecond column, view of the live region only."""
-        raise NotImplementedError
+        return self._ts[: self._size]
 
     @property
     def open(self) -> npt.NDArray[np.float64]:
-        raise NotImplementedError
+        return self._open[: self._size]
 
     @property
     def high(self) -> npt.NDArray[np.float64]:
-        raise NotImplementedError
+        return self._high[: self._size]
 
     @property
     def low(self) -> npt.NDArray[np.float64]:
-        raise NotImplementedError
+        return self._low[: self._size]
 
     @property
     def close(self) -> npt.NDArray[np.float64]:
-        raise NotImplementedError
+        return self._close[: self._size]
 
     @property
     def volume(self) -> npt.NDArray[np.float64]:
-        raise NotImplementedError
+        return self._volume[: self._size]
 
     # ---- access ------------------------------------------------------------ #
 
     def tail(self, n: int) -> BarSeries:
         """View of the last ``n`` bars. No copy."""
-        raise NotImplementedError
+        start = max(self._size - max(n, 0), 0)
+        return self._window(start, self._size)
 
     def slice(self, start: UtcDatetime, end: UtcDatetime) -> BarSeries:
-        raise NotImplementedError
+        """View of the bars in the closed interval ``[start, end]``."""
+        ts = self.timestamps
+        lo = int(np.searchsorted(ts, to_epoch_ns(start), side="left"))
+        hi = int(np.searchsorted(ts, to_epoch_ns(end), side="right"))
+        return self._window(lo, hi)
+
+    def _window(self, lo: int, hi: int) -> BarSeries:
+        return BarSeries._adopt(
+            self.instrument_id,
+            self.timeframe,
+            (
+                self._ts[lo:hi],
+                self._open[lo:hi],
+                self._high[lo:hi],
+                self._low[lo:hi],
+                self._close[lo:hi],
+                self._volume[lo:hi],
+            ),
+        )
 
     def bar_at(self, index: int) -> Bar:
         """Materialise one row back into a :class:`Bar` (negative index allowed)."""
-        raise NotImplementedError
+        i = index + self._size if index < 0 else index
+        if not 0 <= i < self._size:
+            raise IndexError(f"Bar index {index} out of range for series of length {self._size}.")
+        return Bar(
+            instrument_id=self.instrument_id,
+            timestamp=from_epoch_ns(int(self._ts[i])),
+            open=float(self._open[i]),
+            high=float(self._high[i]),
+            low=float(self._low[i]),
+            close=float(self._close[i]),
+            volume=float(self._volume[i]),
+            timeframe=self.timeframe,
+        )
 
     def to_frame(self) -> object:
         """Export to ``pandas.DataFrame``; reporting/debugging only."""
-        raise NotImplementedError
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "open": self.open,
+                "high": self.high,
+                "low": self.low,
+                "close": self.close,
+                "volume": self.volume,
+            },
+            index=pd.DatetimeIndex(self.timestamps.astype("datetime64[ns]"), tz="UTC", name="ts"),
+        )
 
     def __len__(self) -> int:
-        raise NotImplementedError
+        return self._size
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"BarSeries({self.instrument_id}, {self.timeframe.value}, "
+            f"n={self._size})"
+        )
