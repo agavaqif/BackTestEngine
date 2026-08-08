@@ -256,6 +256,17 @@ class MergedDataFeed(DataFeed):
         self._last_emitted_ns = _NEVER_SEEN
         self._steps = 0
         self._closes = 0
+        self._shadowed = 0
+        # prepare() re-collects from the providers, and _collect_actions appends
+        # blind. Left in place, a walk-forward that re-reads the same window
+        # would see one 2:1 split twice on the second fold and three times on
+        # the third — a 4x then 8x adjustment, applied silently.
+        self._actions.clear()
+        # add_instrument() floors a new subscription at _current.timestamp to
+        # keep it from seeing bars the run has already passed. A _current left
+        # over from the previous run puts that floor at the *end* of the window,
+        # so every bar of the new symbol is dropped and it simply never appears.
+        self._current = None
 
     # ---- iteration ------------------------------------------------------------ #
 

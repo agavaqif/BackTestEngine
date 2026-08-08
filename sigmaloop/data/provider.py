@@ -19,7 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Self
 
 from sigmaloop.domain.account import CorporateAction
 from sigmaloop.domain.bar import Bar, BarSeries, OptionChain
@@ -205,7 +205,9 @@ class DataProvider(ABC):
     def close(self) -> None:
         """Release resources. Always called by the engine, even on failure."""
 
-    def __enter__(self) -> DataProvider:
+    def __enter__(self) -> Self:
+        # Self, not DataProvider: `with CsvDataProvider(...) as p` must keep the
+        # concrete type, or an options-mode run loses get_chain() to the checker.
         self.open()
         return self
 

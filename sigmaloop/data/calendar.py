@@ -163,9 +163,16 @@ class TradingCalendar(ABC):
             return
         width = timeframe.duration
         moment = session.open_at + width
-        while moment <= session.close_at:
+        while moment < session.close_at:
             yield moment
             moment += width
+        # The last bar is truncated whenever the session is not a whole number
+        # of timeframes long: NYSE's 6.5 hours against H1 leaves a half-hour
+        # stub, and against H4 leaves a two-and-a-half-hour one. The feed still
+        # emits it, and it is the bar the closing auction prints into, so a gap
+        # check that did not expect it would ignore a missing close — or flag
+        # the real one as a surprise.
+        yield session.close_at
 
     def year_fraction(self, start: UtcDatetime, end: UtcDatetime) -> float:
         """Elapsed time in years — the denominator of CAGR and borrow accrual.

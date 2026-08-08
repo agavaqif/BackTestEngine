@@ -8,8 +8,8 @@ from sigmaloop.results.report import (
     CsvReporter,
     HtmlReporter,
     JsonReporter,
-    ReportOptions,
     Reporter,
+    ReportOptions,
     TextReporter,
 )
 from sigmaloop.results.result import BacktestResult, RunSummaryStats

@@ -15,7 +15,7 @@ from sigmaloop.data.provider import DataRequest
 from sigmaloop.data.providers.csv_provider import CsvDataProvider, CsvProviderConfig
 from sigmaloop.domain.bar import BarSeries
 from sigmaloop.domain.instrument import Equity
-from sigmaloop.types import Symbol, Timeframe
+from sigmaloop.types import AssetClass, Symbol, Timeframe
 
 
 def provider(path: Path, cache: Path, **kwargs: object) -> CsvDataProvider:
@@ -210,7 +210,7 @@ def test_memory_cache_lru_eviction() -> None:
     per_entry = one.timestamps.nbytes + 5 * one.open.nbytes
     cache = MemoryDataCache(max_bytes=per_entry * 2)
 
-    keys = [CacheKey("csv", Symbol(s), "1d", 0, 1, True) for s in ("A", "B", "C")]
+    keys = [CacheKey("csv", Symbol(s), "equity", "1d", 0, 1, True) for s in ("A", "B", "C")]
     for key, symbol in zip(keys, ("A", "B", "C"), strict=True):
         cache.put(key, series(symbol, 1_000))
 
@@ -229,7 +229,7 @@ def test_memory_cache_refuses_oversized_entries() -> None:
         *(np.ones(10_000, dtype="float64") for _ in range(5)),
     )
     cache = MemoryDataCache(max_bytes=1_024)
-    key = CacheKey("csv", Symbol("A"), "1d", 0, 1, True)
+    key = CacheKey("csv", Symbol("A"), "equity", "1d", 0, 1, True)
     cache.put(key, big)
     assert not cache.contains(key), "one huge series must not evict the whole cache"
 
@@ -238,7 +238,7 @@ def test_parquet_cache_roundtrip_and_atomicity(tmp_path: Path) -> None:
     import numpy as np
 
     cache = ParquetDataCache(tmp_path / "pq")
-    key = CacheKey("csv", Symbol("MSFT"), "1d", 0, 1, True)
+    key = CacheKey("csv", Symbol("MSFT"), "equity", "1d", 0, 1, True)
     original = BarSeries.from_arrays(
         Equity.make_id(Symbol("MSFT")),
         Timeframe.D1,
@@ -268,7 +268,7 @@ def test_tiered_cache_promotes_from_disk(tmp_path: Path) -> None:
     fast = MemoryDataCache(max_bytes=1 << 20)
     slow = ParquetDataCache(tmp_path / "pq")
     tiered = TieredDataCache(fast, slow)
-    key = CacheKey("csv", Symbol("MSFT"), "1d", 0, 1, True)
+    key = CacheKey("csv", Symbol("MSFT"), "equity", "1d", 0, 1, True)
     series = BarSeries.from_arrays(
         Equity.make_id(Symbol("MSFT")),
         Timeframe.D1,
@@ -393,8 +393,8 @@ def test_tiered_cache_threshold_is_honoured(tmp_path: Path) -> None:
     fast, slow = MemoryDataCache(max_bytes=1 << 20), ParquetDataCache(tmp_path / "pq")
     tiered = TieredDataCache(fast, slow, min_slow_rows=100)
 
-    small = CacheKey("csv", Symbol("A"), "1d", 0, 1, True)
-    large = CacheKey("csv", Symbol("A"), "1d", 0, 2, True)
+    small = CacheKey("csv", Symbol("A"), "equity", "1d", 0, 1, True)
+    large = CacheKey("csv", Symbol("A"), "equity", "1d", 0, 2, True)
     tiered.put(small, series(10))
     tiered.put(large, series(500))
 
@@ -491,3 +491,81 @@ def test_no_warmup_still_prunes_tightly(tmp_path: Path) -> None:
     p = provider(root, tmp_path / "c")
     window = request_for("MSFT", start=utc(2023, 3, 14), end=utc(2023, 3, 31))
     assert len(p._bar_source(window)[0]) == 4, "only the four sessions in the window"
+
+
+# --------------------------------------------------------------------------- #
+# Cache key identity — what may and may not share an entry
+# --------------------------------------------------------------------------- #
+
+
+def test_the_key_separates_two_asset_classes_on_one_ticker() -> None:
+    """A ticker is not unique across asset classes, and the class routes to a
+    different provider and a different instrument_id."""
+    def request(asset_class: AssetClass) -> DataRequest:
+        return DataRequest(
+            symbols=(Symbol("SPY"),),
+            start=utc(2023, 3, 1),
+            end=utc(2023, 3, 31),
+            timeframe=Timeframe.D1,
+            asset_class=asset_class,
+        )
+
+    etf = CacheKey.from_request("csv", Symbol("SPY"), request(AssetClass.ETF))
+    equity = CacheKey.from_request("csv", Symbol("SPY"), request(AssetClass.EQUITY))
+
+    assert etf != equity
+    assert etf.digest() != equity.digest(), "the on-disk path would collide too"
+
+
+def test_the_key_separates_two_revisions_of_the_same_source() -> None:
+    """Without this the disk tier outlives the data it describes."""
+    request = DataRequest(
+        symbols=(Symbol("MSFT"),), start=utc(2023, 3, 1), end=utc(2023, 3, 31), timeframe=Timeframe.D1
+    )
+    before = CacheKey.from_request("csv", Symbol("MSFT"), request, "digest-of-revision-1")
+    after = CacheKey.from_request("csv", Symbol("MSFT"), request, "digest-of-revision-2")
+
+    assert before != after
+    assert before.digest() != after.digest()
+
+
+def test_an_edited_csv_is_not_served_from_the_previous_run(tmp_path: Path, days: list[date]) -> None:
+    """load_series' disk tier survives the process, so a second run over an
+    edited file was answered with the first run's bars."""
+    root, cache = tmp_path / "mut", tmp_path / "c"
+    root.mkdir()
+
+    def read() -> float:
+        p = provider(root, cache)
+        series = p.load_series(Symbol("MSFT"), request_for("MSFT", **MARCH))
+        p.close()
+        return float(series.close[0])
+
+    daily_frame("MSFT", days, 100).to_csv(root / "MSFT.csv", index=False)
+    before = read()
+
+    daily_frame("MSFT", days, 222).to_csv(root / "MSFT.csv", index=False)
+    after = read()
+
+    assert after != pytest.approx(before), "stale series cache served the old close"
+    assert after == pytest.approx(before + 122.0), "and it served the new one"
+
+
+def test_reinterpreting_the_same_bytes_does_not_reuse_the_series(
+    tmp_path: Path, days: list[date]
+) -> None:
+    """Same file, different source_timezone — different instants, so a shared
+    entry would silently shift every bar."""
+    root, cache = tmp_path / "tz2", tmp_path / "c"
+    root.mkdir()
+    frame = daily_frame("MSFT", days, 100)
+    frame["date"] = [f"{d.isoformat()} 16:00:00" for d in days]
+    frame.to_csv(root / "MSFT.csv", index=False)
+
+    def first_ts(tz: str) -> int:
+        p = provider(root, cache, source_timezone=tz)
+        series = p.load_series(Symbol("MSFT"), request_for("MSFT", **MARCH))
+        p.close()
+        return int(series.timestamps[0])
+
+    assert first_ts("UTC") != first_ts("America/New_York")

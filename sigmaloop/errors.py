@@ -85,7 +85,16 @@ class PluginNotFoundError(PluginError):
     """No plugin registered under the requested name in the given group."""
 
     def __init__(self, group: str, name: str, available: tuple[str, ...] = ()) -> None:
-        raise NotImplementedError
+        listing = ", ".join(sorted(available)) if available else "none registered"
+        super().__init__(
+            f"No {group!r} plugin named {name!r}. Available: {listing}.",
+            group=group,
+            name=name,
+            available=available,
+        )
+        self.group = group
+        self.name = name
+        self.available = available
 
 
 class DuplicatePluginError(PluginError):
@@ -205,7 +214,17 @@ class OrderRejectedError(ExecutionError):
     """
 
     def __init__(self, order_id: OrderId, reason: RejectReason, message: str) -> None:
-        raise NotImplementedError
+        # ``message`` is kept under a distinct name: ``SigmaLoopError.__str__``
+        # renders ``self.message``, so rebinding it here would throw away the
+        # order id and reason this class exists to put in front of the reader.
+        super().__init__(
+            f"Order {order_id} rejected ({reason.value}): {message}",
+            order_id=order_id,
+            reason=reason,
+        )
+        self.order_id = order_id
+        self.reason = reason
+        self.detail = message
 
 
 class AccountingError(SigmaLoopError):

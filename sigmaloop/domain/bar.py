@@ -633,7 +633,4 @@ class BarSeries:
         return self._size
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return (
-            f"BarSeries({self.instrument_id}, {self.timeframe.value}, "
-            f"n={self._size})"
-        )
+        return f"BarSeries({self.instrument_id}, {self.timeframe.value}, n={self._size})"

@@ -16,7 +16,7 @@ import itertools
 import shutil
 import tracemalloc
 from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -632,3 +632,71 @@ def test_replay_feed_cannot_subscribe_mid_run() -> None:
     feed = ReplayDataFeed([replay_snapshot(1)])
     with pytest.raises(NotImplementedError, match="mid-run"):
         feed.add_instrument(Equity(instrument_id=Equity.make_id(Symbol("AAA")), symbol=Symbol("AAA")))
+
+
+# --------------------------------------------------------------------------- #
+# Re-reading a closed feed — walk-forward hygiene
+# --------------------------------------------------------------------------- #
+
+
+class ActionProvider(SyntheticProvider):
+    """Reports one 2:1 split, so a re-read can be checked for double-counting."""
+
+    EX_DATE = date(2024, 1, 3)
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        base = super().capabilities
+        return ProviderCapabilities(
+            name=base.name,
+            asset_classes=base.asset_classes,
+            timeframes=base.timeframes,
+            supports_corporate_actions=True,
+        )
+
+    def corporate_actions(
+        self, symbol: Symbol, start: UtcDatetime, end: UtcDatetime
+    ) -> Sequence[CorporateAction]:
+        return (
+            CorporateAction(
+                action_type=CorporateActionType.SPLIT,
+                instrument_id=Equity.make_id(symbol),
+                symbol=symbol,
+                ex_date=self.EX_DATE,
+                ratio=2.0,
+            ),
+        )
+
+
+def test_corporate_actions_do_not_accumulate_across_re_reads() -> None:
+    """prepare() re-collects from the providers. Left uncleared, fold 2 of a
+    walk-forward applies one 2:1 split twice — a 4x adjustment, silently."""
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    request = DataRequest(symbols=(Symbol("AAA"),), start=start, end=start + timedelta(days=6))
+    feed = MergedDataFeed(FeedPlan(bar_requests=(request,)), [ActionProvider(["AAA"], 5)])
+
+    for _ in range(3):
+        list(feed)
+        at_ex = feed.corporate_actions_at(datetime(2024, 1, 3, tzinfo=UTC))
+        assert len(at_ex) == 1
+        feed.close()
+
+
+def test_closing_forgets_where_the_previous_run_ended() -> None:
+    """add_instrument floors a new subscription at the current bar. A stale
+    _current puts that floor at the end of the window, so the new symbol never
+    appears — no error, it is simply absent."""
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    request = DataRequest(symbols=(Symbol("AAA"),), start=start, end=start + timedelta(days=6))
+    feed = MergedDataFeed(FeedPlan(bar_requests=(request,)), [SyntheticProvider(["AAA", "BBB"], 5)])
+
+    list(feed)
+    feed.close()
+    assert feed.current is None
+
+    feed.prepare()
+    feed.add_instrument(Equity(instrument_id=Equity.make_id(Symbol("BBB")), symbol=Symbol("BBB")))
+    seen = {iid for snapshot in feed for iid in snapshot.instruments()}
+
+    assert "EQ:BBB" in seen, "the mid-run subscription was floored out of existence"
+    assert "EQ:AAA" in seen

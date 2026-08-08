@@ -122,17 +122,27 @@ class Instrument(ABC):
         raise NotImplementedError
 
     def round_price(self, price: Price) -> Price:
-        """Snap ``price`` to the nearest valid tick."""
-        ticks = round(price / self.tick_size)
+        """Snap ``price`` to the nearest valid tick, halves away from zero.
+
+        Not :func:`round`, which is banker's rounding: on a 0.01 grid that sends
+        0.125 down to 0.12 but 0.375 up to 0.38, so a price series landing on
+        half-ticks alternates direction for no reason a reader could predict.
+        See :func:`sigmaloop.utils.money.round_money` for the same argument.
+        """
+        ticks = math.floor(abs(price) / self.tick_size + 0.5)
         # Re-round the product: tick sizes such as 0.01 are not exactly
         # representable, so ticks * tick_size drifts into the 1e-17 range.
-        return round(ticks * self.tick_size, _PRICE_DECIMALS)
+        magnitude = round(ticks * self.tick_size, _PRICE_DECIMALS)
+        return -magnitude if price < 0 else magnitude
 
     def round_quantity(self, quantity: Quantity) -> Quantity:
         """Floor ``quantity`` (toward zero) to a valid lot multiple."""
         lots = math.floor(abs(quantity) / self.lot_size + _LOT_EPSILON)
         magnitude = round(lots * self.lot_size, _QUANTITY_DECIMALS)
-        return -magnitude if quantity < 0 else magnitude
+        # `magnitude or 0.0` rather than a bare negation: rounding a small short
+        # down to nothing would otherwise yield -0.0, which prints as "-0" in
+        # every report and compares equal to 0.0 so no test would catch it.
+        return -magnitude if quantity < 0 and magnitude else magnitude
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

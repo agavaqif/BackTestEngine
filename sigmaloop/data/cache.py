@@ -29,9 +29,10 @@ from sigmaloop.utils.timeutil import to_epoch_ns
 
 __all__ = ["CacheKey", "CacheStats", "DataCache", "MemoryDataCache", "ParquetDataCache", "TieredDataCache"]
 
-#: Bumped whenever the on-disk column layout changes, so an old cache is
-#: ignored rather than misread.
-SCHEMA_VERSION = 1
+#: Bumped whenever the on-disk column layout *or the key* changes, so an old
+#: cache is ignored rather than misread. v2 added ``asset_class`` and
+#: ``source_digest``; entries written under v1 are keyed too loosely to trust.
+SCHEMA_VERSION = 2
 
 _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -42,6 +43,11 @@ class CacheKey:
 
     provider: str
     symbol: Symbol
+    #: A ticker is not unique across asset classes, and the class is a routing
+    #: dimension: ``MergedDataFeed`` picks providers by it and
+    #: ``resolve_instrument`` returns a different ``instrument_id`` for it. Left
+    #: out, ``SPY`` as an ETF and ``SPY`` as an equity share one entry.
+    asset_class: str
     timeframe: str
     start_ns: int
     end_ns: int
@@ -50,18 +56,33 @@ class CacheKey:
     #: wider window than the same request without one, so sharing an entry would
     #: silently hand indicators a series that is too short.
     warmup_bars: int = 0
+    #: Identity of the bytes *behind* the request: the provider's parsing
+    #: configuration plus whatever it uses to tell one revision of a source from
+    #: the next. Without it the disk tier outlives the data it describes, and a
+    #: re-run over an edited file — or the same file read under a different
+    #: timezone — is served the previous answer. Empty only for providers whose
+    #: output cannot change for a fixed request.
+    source_digest: str = ""
     schema_version: int = SCHEMA_VERSION
 
     @classmethod
-    def from_request(cls, provider: str, symbol: Symbol, request: DataRequest) -> CacheKey:
+    def from_request(
+        cls,
+        provider: str,
+        symbol: Symbol,
+        request: DataRequest,
+        source_digest: str = "",
+    ) -> CacheKey:
         return cls(
             provider=provider,
             symbol=symbol,
+            asset_class=str(request.asset_class.value),
             timeframe=str(request.timeframe.value),
             start_ns=to_epoch_ns(request.start),
             end_ns=to_epoch_ns(request.end),
             adjusted=request.adjusted,
             warmup_bars=request.warmup_bars,
+            source_digest=source_digest,
         )
 
     def digest(self) -> str:
@@ -74,11 +95,13 @@ class CacheKey:
             (
                 self.provider,
                 self.symbol,
+                self.asset_class,
                 self.timeframe,
                 str(self.start_ns),
                 str(self.end_ns),
                 "1" if self.adjusted else "0",
                 str(self.warmup_bars),
+                self.source_digest,
                 str(self.schema_version),
             )
         )

@@ -223,3 +223,27 @@ def test_continuous_year_fraction_is_calendar_time(always_on: ContinuousCalendar
         datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
     )
     assert half_day == pytest.approx(0.5 / 365)
+
+
+def test_the_closing_bar_is_expected_even_when_it_is_a_stub(nyse: NyseCalendar) -> None:
+    """NYSE runs 6.5 hours, so hourly bars leave a half-hour stub at the close.
+    Gap detection that skipped it would ignore a missing closing auction — the
+    one bar MOC orders and the daily mark both price against."""
+    close = datetime(2024, 1, 2, 21, 0, tzinfo=UTC)
+
+    for timeframe in (Timeframe.M30, Timeframe.H1, Timeframe.H4, Timeframe.D1):
+        stamps = list(nyse.bar_times(date(2024, 1, 2), timeframe))
+        assert stamps[-1] == close, timeframe
+        assert stamps.count(close) == 1, f"{timeframe} listed the close twice"
+        assert stamps == sorted(stamps), timeframe
+
+
+def test_a_half_day_close_is_expected_too(nyse: NyseCalendar) -> None:
+    half_day = date(2024, 7, 3)
+    assert nyse.is_half_day(half_day)
+    session = nyse.session_on(half_day)
+    assert session is not None
+
+    stamps = list(nyse.bar_times(half_day, Timeframe.H1))
+
+    assert stamps[-1] == session.close_at

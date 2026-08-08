@@ -49,7 +49,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeAlias
 
 import numpy as np
 
@@ -279,6 +279,16 @@ class CsvProviderConfig:
     #: IANA zone of naive timestamps in the file; converted to UTC on load.
     #: Ignored for integer epoch columns, which are UTC by definition.
     source_timezone: str = "America/New_York"
+    #: How to read a naive local timestamp that occurs twice, in the hour a
+    #: DST fall-back repeats. ``"earliest"`` takes the pre-transition offset for
+    #: both passes, which makes them the same instant — so the second one
+    #: becomes a duplicate and ``on_duplicate`` collapses it, quietly costing
+    #: one hour of bars per instrument per year. ``"raise"`` refuses instead,
+    #: which is the honest choice for a feed that really does cross the
+    #: transition; ``"latest"`` takes the post-transition offset. The default is
+    #: unchanged because most daily and session-hours data never spans the
+    #: repeated hour at all.
+    ambiguous_time: Literal["earliest", "latest", "raise"] = "earliest"
     timestamp_format: str | None = None
     #: ``None`` infers from the column name: ``window_start`` and friends label
     #: the bar OPEN and are shifted forward by one timeframe to the close.
@@ -661,7 +671,7 @@ class _TimestampNormaliser:
             stamps = pc.assume_timezone(
                 pc.cast(stamps, pa_.timestamp("ns")),
                 self._config.source_timezone,
-                ambiguous="earliest",
+                ambiguous=self._config.ambiguous_time,
                 nonexistent="earliest",
             )
         epoch = pc.cast(pc.cast(stamps, pa_.timestamp("ns", tz="UTC")), pa_.int64())
@@ -755,6 +765,7 @@ class CsvDataProvider(DataProvider):
                 "columns": None if config.columns is None else config.columns.named_fields(),
                 "timeframe": None if config.timeframe is None else config.timeframe.value,
                 "tz": config.source_timezone,
+                "ambiguous": config.ambiguous_time,
                 "fmt": config.timestamp_format,
                 "left": config.left_labelled,
                 "epoch": config.epoch_unit.value,
@@ -768,6 +779,31 @@ class CsvDataProvider(DataProvider):
             sort_keys=True,
         )
         return hashlib.blake2b(payload.encode(), digest_size=6).hexdigest()
+
+    def _source_digest(self) -> str:
+        """Identity of the bytes the next read will see.
+
+        The per-file Parquet layer already folds ``_columns_fingerprint`` into
+        its filenames; the series cache above it keyed only on the *request*, so
+        a re-run over an edited CSV — or the same CSV read under a different
+        ``source_timezone`` — was served the previous run's bars from disk. This
+        closes that gap by putting the config hash and the current revision of
+        every source file into the series key too.
+
+        Deliberately covers all discovered files rather than only those a given
+        symbol touches: resolving that per symbol would mean a file-selection
+        pass on every cache *lookup*, and paying a few stats to over-invalidate
+        is the cheaper mistake.
+        """
+        parts = [self._columns_fingerprint]
+        for path in self._discover_files():
+            try:
+                stat = path.stat()
+            except OSError:  # pragma: no cover - vanished between glob and stat
+                parts.append(f"{path}|missing")
+            else:
+                parts.append(f"{path}|{stat.st_size}|{stat.st_mtime_ns}")
+        return hashlib.blake2b("\x00".join(parts).encode("utf-8"), digest_size=10).hexdigest()
 
     def _cache_root(self) -> Path:
         if self._config.cache_dir is not None:
@@ -1848,7 +1884,7 @@ class CsvDataProvider(DataProvider):
     def load_series(self, symbol: Symbol, request: DataRequest) -> BarSeries:
         ticker = Symbol(str(symbol).strip().upper())
         scoped = request if request.symbols == (ticker,) else replace(request, symbols=(ticker,))
-        key = CacheKey.from_request(self.name, ticker, scoped)
+        key = CacheKey.from_request(self.name, ticker, scoped, self._source_digest())
         cached = self._cache.get(key)
         if cached is not None:
             return cached
@@ -1862,9 +1898,11 @@ class CsvDataProvider(DataProvider):
         """One pass over the files for every symbol, rather than N passes."""
         result: dict[Symbol, BarSeries] = {}
         missing: list[Symbol] = []
+        # Once per call, not once per symbol: it stats every source file.
+        digest = self._source_digest()
         for symbol in request.symbols:
             scoped = replace(request, symbols=(symbol,))
-            cached = self._cache.get(CacheKey.from_request(self.name, symbol, scoped))
+            cached = self._cache.get(CacheKey.from_request(self.name, symbol, scoped, digest))
             if cached is not None:
                 result[symbol] = cached
             else:
@@ -1873,7 +1911,10 @@ class CsvDataProvider(DataProvider):
             loaded = self._load_many_uncached(replace(request, symbols=tuple(missing)))
             for symbol, series in loaded.items():
                 self._cache.put(
-                    CacheKey.from_request(self.name, symbol, replace(request, symbols=(symbol,))), series
+                    CacheKey.from_request(
+                        self.name, symbol, replace(request, symbols=(symbol,)), digest
+                    ),
+                    series,
                 )
             result.update(loaded)
         return result

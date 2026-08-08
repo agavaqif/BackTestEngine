@@ -24,6 +24,9 @@ from datetime import datetime, timedelta
 from enum import Enum, IntEnum, StrEnum, auto
 from typing import NewType, TypeAlias
 
+# Grouped by kind rather than sorted: this list doubles as the table of contents
+# for the module, and alphabetising it would interleave the aliases with the
+# enums and lose that. See the RUF022 note in pyproject.toml.
 __all__ = [
     # aliases
     "Symbol",
@@ -243,11 +246,11 @@ class OrderSide(StrEnum):
     @property
     def sign(self) -> int:
         """``+1`` for BUY, ``-1`` for SELL — used to sign quantity deltas."""
-        raise NotImplementedError
+        return 1 if self is OrderSide.BUY else -1
 
     @property
     def opposite(self) -> OrderSide:
-        raise NotImplementedError
+        return OrderSide.SELL if self is OrderSide.BUY else OrderSide.BUY
 
 
 class PositionSide(StrEnum):
@@ -286,11 +289,26 @@ class OrderStatus(StrEnum):
 
     @property
     def is_terminal(self) -> bool:
-        raise NotImplementedError
+        return self in _TERMINAL_ORDER_STATUSES
 
     @property
     def is_open(self) -> bool:
-        raise NotImplementedError
+        """The complement of :attr:`is_terminal` — the order can still change.
+
+        ``PENDING_NEW`` counts as open: it has been raised and not resolved, so
+        the broker still owes it an outcome.
+        """
+        return self not in _TERMINAL_ORDER_STATUSES
+
+
+_TERMINAL_ORDER_STATUSES: frozenset[OrderStatus] = frozenset(
+    {
+        OrderStatus.FILLED,
+        OrderStatus.CANCELLED,
+        OrderStatus.REJECTED,
+        OrderStatus.EXPIRED,
+    }
+)
 
 
 class RejectReason(StrEnum):
