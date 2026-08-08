@@ -34,6 +34,10 @@ __all__ = ["ContinuousCalendar", "NyseCalendar", "Session", "TradingCalendar"]
 #: (September 2001), so ten covers any real holiday cluster with room to spare.
 _MAX_CLOSURE_DAYS = 10
 
+#: A tick spans no wall-clock time, so it opens a session only by landing on the
+#: bell itself. ``Timeframe.TICK.duration`` raises rather than return this.
+_ZERO_WIDTH = timedelta(0)
+
 
 @dataclass(frozen=True, slots=True)
 class Session:
@@ -142,12 +146,28 @@ class TradingCalendar(ABC):
         return session is not None and moment >= session.close_at
 
     def is_session_open(self, timestamp: UtcDatetime, timeframe: Timeframe) -> bool:
-        """True if a bar ending here is the first bar of its session."""
+        """True if a bar ending here is the first bar of its session.
+
+        Ticks never open one: they have no width, and the session is half-open at
+        the start, so no tick both follows the bell and ends within a bar of it.
+        :meth:`is_session_close` is not symmetric here — a tick at or after the
+        closing bell does close its session, which is what keeps MOC handling and
+        end-of-day liquidation working on tick data.
+
+        The special case exists because :attr:`Timeframe.duration` *raises* for
+        ``TICK``, and the preceding ``session is not None`` short-circuits it: the
+        error would not surface until the first tick that landed inside regular
+        hours, so a run could look healthy through thousands of pre-market ticks
+        and then die mid-session.
+        """
         if not timeframe.is_intraday:
             return True
         moment = ensure_utc(timestamp)
         session = self._session_for_bar_close(moment)
-        return session is not None and moment <= session.open_at + timeframe.duration
+        if session is None:
+            return False
+        width = _ZERO_WIDTH if timeframe is Timeframe.TICK else timeframe.duration
+        return moment <= session.open_at + width
 
     def bar_times(self, day: date, timeframe: Timeframe) -> Iterator[UtcDatetime]:
         """Expected bar-close timestamps for one session.

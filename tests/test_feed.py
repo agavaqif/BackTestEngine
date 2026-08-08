@@ -686,6 +686,47 @@ def test_corporate_actions_do_not_accumulate_across_re_reads() -> None:
         feed.close()
 
 
+def test_two_providers_reporting_one_action_do_not_double_it() -> None:
+    """Duplicate bars resolve first-provider-wins; duplicate actions must too.
+
+    A 2:1 split counted twice is a 4x adjustment, and nothing downstream can
+    tell that apart from a genuine 4:1.
+    """
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    request = DataRequest(symbols=(Symbol("AAA"),), start=start, end=start + timedelta(days=6))
+    feed = MergedDataFeed(
+        FeedPlan(bar_requests=(request,)),
+        [ActionProvider(["AAA"], 5), ActionProvider(["AAA"], 5)],
+    )
+    feed.prepare()
+
+    assert len(feed.corporate_actions_at(datetime(2024, 1, 3, tzinfo=UTC))) == 1
+
+
+def test_a_mid_run_subscription_can_be_made_again_on_the_next_fold() -> None:
+    """add_instrument returns early for anything already registered, and the
+    registry outlived close(). A name a screener admitted in fold 1 was then
+    silently refused its subscription in every later fold: instruments() still
+    advertised it, but no source was opened and it never traded again."""
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    request = DataRequest(symbols=(Symbol("AAA"),), start=start, end=start + timedelta(days=6))
+    feed = MergedDataFeed(FeedPlan(bar_requests=(request,)), [SyntheticProvider(["AAA", "BBB"], 5)])
+    admitted = Equity(instrument_id=Equity.make_id(Symbol("BBB")), symbol=Symbol("BBB"))
+
+    folds = []
+    for _ in range(2):
+        seen: set[str] = set()
+        for index, snapshot in enumerate(feed):
+            if index == 0:
+                feed.add_instrument(admitted)
+            seen |= set(snapshot.instruments())
+        folds.append(seen)
+        feed.close()
+
+    assert "EQ:BBB" in folds[0]
+    assert folds[1] == folds[0], "a re-read must resubscribe, not inherit fold 1's registry"
+
+
 def test_closing_forgets_where_the_previous_run_ended() -> None:
     """add_instrument floors a new subscription at the current bar. A stale
     _current puts that floor at the end of the window, so the new symbol never

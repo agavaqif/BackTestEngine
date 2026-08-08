@@ -267,6 +267,12 @@ class MergedDataFeed(DataFeed):
         # over from the previous run puts that floor at the *end* of the window,
         # so every bar of the new symbol is dropped and it simply never appears.
         self._current = None
+        # prepare() re-resolves every instrument the plan names, and
+        # add_instrument() returns early for anything already registered. Left
+        # populated, a name a screener admitted mid-run in fold 1 is silently
+        # refused its subscription in fold 2 onward: instruments() still
+        # advertises it, but no source is ever opened and it never trades again.
+        self._registry.clear()
 
     # ---- iteration ------------------------------------------------------------ #
 
@@ -499,11 +505,26 @@ class MergedDataFeed(DataFeed):
             self._registry.setdefault(instrument.instrument_id, instrument)
 
     def _collect_actions(self, provider: DataProvider, request: DataRequest) -> None:
+        """Fold one provider's corporate actions into the by-ex-date index.
+
+        Runs once per (request, capable provider), so when two providers both
+        cover a symbol — the "CSV for one directory, CSV for another" setup whose
+        duplicate *bars* `_absorb` already resolves first-provider-wins — the same
+        action arrives twice. Applying a 2:1 split twice is a 4x adjustment, and
+        nothing downstream can tell the difference from a genuine 4:1.
+
+        Identical actions are therefore dropped. ``CorporateAction`` is a frozen
+        dataclass, so equality compares every field: two providers reporting one
+        split collapse to one, while a split and a dividend sharing an ex-date,
+        or two dividends of different size, both survive.
+        """
         if not provider.capabilities.supports_corporate_actions:
             return
         for symbol in request.symbols:
             for action in provider.corporate_actions(symbol, request.start, request.end):
-                self._actions.setdefault(action.ex_date, []).append(action)
+                same_day = self._actions.setdefault(action.ex_date, [])
+                if action not in same_day:
+                    same_day.append(action)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return (

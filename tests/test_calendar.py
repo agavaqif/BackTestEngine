@@ -247,3 +247,24 @@ def test_a_half_day_close_is_expected_too(nyse: NyseCalendar) -> None:
     stamps = list(nyse.bar_times(half_day, Timeframe.H1))
 
     assert stamps[-1] == session.close_at
+
+
+def test_ticks_do_not_crash_the_session_flags(nyse: NyseCalendar) -> None:
+    """Timeframe.TICK.duration raises, and `session is not None` short-circuits
+    ahead of it — so the error would not fire until the first tick that landed
+    inside regular hours, after a run had looked healthy all pre-market.
+
+    A tick never opens a session — it has no width and the session is half-open
+    at the start — but one at or after the closing bell does close it, which is
+    what keeps MOC handling and end-of-day liquidation alive on tick data.
+    """
+    for moment in (
+        datetime(2023, 3, 1, 12, 0, tzinfo=UTC),  # pre-market
+        datetime(2023, 3, 1, 14, 30, tzinfo=UTC),  # the opening bell
+        datetime(2023, 3, 1, 15, 0, tzinfo=UTC),  # mid-session
+        datetime(2023, 3, 1, 21, 0, tzinfo=UTC),  # the close
+    ):
+        assert nyse.is_session_open(moment, Timeframe.TICK) is False
+
+    assert nyse.is_session_close(datetime(2023, 3, 1, 15, 0, tzinfo=UTC), Timeframe.TICK) is False
+    assert nyse.is_session_close(datetime(2023, 3, 1, 21, 0, tzinfo=UTC), Timeframe.TICK) is True
