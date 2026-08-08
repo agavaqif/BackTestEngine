@@ -360,17 +360,13 @@ class MergedDataFeed(DataFeed):
             after_ns = to_epoch_ns(start)
         if start >= template.end:
             return  # the run is already past this plan's window
-        request = replace(
-            template, symbols=(instrument.symbol,), start=start, warmup_bars=0
-        )
+        request = replace(template, symbols=(instrument.symbol,), start=start, warmup_bars=0)
         for provider in self._providers_for(request):
             self._open_source(provider.stream_bars(request), after_ns=after_ns)
 
     # ---- merge internals -------------------------------------------------------- #
 
-    def _open_source(
-        self, iterator: Iterator[_Update], *, after_ns: int | None = None
-    ) -> None:
+    def _open_source(self, iterator: Iterator[_Update], *, after_ns: int | None = None) -> None:
         """Register a stream and prime the heap with its first item."""
         if after_ns is not None:
             floor = after_ns
@@ -465,14 +461,11 @@ class MergedDataFeed(DataFeed):
             )
         return capable
 
-    def _chain_providers_for(
-        self, request: OptionChainRequest
-    ) -> tuple[OptionsDataProvider, ...]:
+    def _chain_providers_for(self, request: OptionChainRequest) -> tuple[OptionsDataProvider, ...]:
         capable = tuple(
             provider
             for provider in self._providers
-            if isinstance(provider, OptionsDataProvider)
-            and provider.capabilities.supports_options
+            if isinstance(provider, OptionsDataProvider) and provider.capabilities.supports_options
         )
         if not capable:
             raise ConfigurationError(

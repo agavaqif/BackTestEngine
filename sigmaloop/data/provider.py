@@ -164,7 +164,9 @@ class DataProvider(ABC):
         """Every symbol this provider can serve. Used to validate universes."""
         raise NotImplementedError
 
-    def coverage(self, symbol: Symbol, timeframe: Timeframe) -> tuple[UtcDatetime, UtcDatetime] | None:
+    def coverage(
+        self, symbol: Symbol, timeframe: Timeframe
+    ) -> tuple[UtcDatetime, UtcDatetime] | None:
         """First and last available timestamps, if cheaply knowable."""
         return None
 

@@ -289,9 +289,7 @@ def test_current_tracks_the_last_yielded_snapshot(wide_layout: Path, tmp_path: P
     assert feed.current is seen[-1]
 
 
-def test_instruments_are_resolved_before_the_first_bar(
-    wide_layout: Path, tmp_path: Path
-) -> None:
+def test_instruments_are_resolved_before_the_first_bar(wide_layout: Path, tmp_path: Path) -> None:
     feed = feed_over(wide_layout, tmp_path / "c", "MSFT", "AAPL")
     assert [i.instrument_id for i in feed.instruments()] == ["EQ:AAPL", "EQ:MSFT"]
 
@@ -478,8 +476,13 @@ def test_a_run_that_does_close_a_session_stays_quiet(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level("WARNING", logger="sigmaloop.data.feed"):
-        list(MergedDataFeed(synthetic_feed(bars=5)._plan, [SyntheticProvider(["AAA"], 5)],
-                            calendar=ContinuousCalendar()))
+        list(
+            MergedDataFeed(
+                synthetic_feed(bars=5)._plan,
+                [SyntheticProvider(["AAA"], 5)],
+                calendar=ContinuousCalendar(),
+            )
+        )
     assert "no session close" not in caplog.text
 
 
@@ -537,17 +540,16 @@ def test_corporate_actions_are_indexed_by_ex_date() -> None:
     assert feed.corporate_actions_at(datetime(2024, 1, 4, tzinfo=UTC)) == ()
 
 
-def test_add_instrument_subscribes_from_the_next_bar(
-    wide_layout: Path, tmp_path: Path
-) -> None:
+def test_add_instrument_subscribes_from_the_next_bar(wide_layout: Path, tmp_path: Path) -> None:
     """A screener admitting a name mid-run must not be handed the bar it just
     made its decision without."""
     feed = feed_over(wide_layout, tmp_path / "c", "MSFT")
     seen: list[MarketSnapshot] = []
     for index, snapshot in enumerate(feed):
         if index == 4:
-            feed.add_instrument(Equity(instrument_id=Equity.make_id(Symbol("AAPL")),
-                                       symbol=Symbol("AAPL")))
+            feed.add_instrument(
+                Equity(instrument_id=Equity.make_id(Symbol("AAPL")), symbol=Symbol("AAPL"))
+            )
         seen.append(snapshot)
 
     assert len(seen) == 20
@@ -631,7 +633,9 @@ def test_replay_feed_rejects_a_misordered_fixture() -> None:
 def test_replay_feed_cannot_subscribe_mid_run() -> None:
     feed = ReplayDataFeed([replay_snapshot(1)])
     with pytest.raises(NotImplementedError, match="mid-run"):
-        feed.add_instrument(Equity(instrument_id=Equity.make_id(Symbol("AAA")), symbol=Symbol("AAA")))
+        feed.add_instrument(
+            Equity(instrument_id=Equity.make_id(Symbol("AAA")), symbol=Symbol("AAA"))
+        )
 
 
 # --------------------------------------------------------------------------- #

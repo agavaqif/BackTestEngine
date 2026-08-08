@@ -55,11 +55,11 @@ def quote_only(tmp_path: Path) -> Path:
         date(2023, 3, 8),
         [
             # bar (09:30, 09:31] -> stamped 09:31
-            (1, 99.0, 101.0),    # mid 100  <- open
+            (1, 99.0, 101.0),  # mid 100  <- open
             (10, 101.0, 103.0),  # mid 102  <- high
-            (59, 97.0, 99.0),    # mid 98   <- low, and the close
+            (59, 97.0, 99.0),  # mid 98   <- low, and the close
             # bar (09:31, 09:32] -> stamped 09:32
-            (61, 103.0, 105.0),   # mid 104
+            (61, 103.0, 105.0),  # mid 104
             (119, 105.0, 107.0),  # mid 106
         ],
     )
@@ -94,7 +94,9 @@ def test_quote_only_dataset_produces_bars(quote_only: Path, tmp_path: Path) -> N
 def test_derived_bars_carry_zero_volume(quote_only: Path, tmp_path: Path) -> None:
     """Quotes are not trades. Inventing volume would feed the participation cap."""
     p = provider(quote_only, tmp_path / "c")
-    assert all(b.volume == 0.0 for b in p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, **MARCH)))
+    assert all(
+        b.volume == 0.0 for b in p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, **MARCH))
+    )
 
 
 def test_derived_bars_carry_the_real_closing_book(quote_only: Path, tmp_path: Path) -> None:
@@ -119,7 +121,11 @@ def test_derived_bars_carry_the_real_closing_book(quote_only: Path, tmp_path: Pa
     ],
 )
 def test_price_basis_selects_the_side(
-    quote_only: Path, tmp_path: Path, basis: QuotePriceBasis, expected_open: float, expected_close: float
+    quote_only: Path,
+    tmp_path: Path,
+    basis: QuotePriceBasis,
+    expected_open: float,
+    expected_close: float,
 ) -> None:
     p = provider(quote_only, tmp_path / f"c{basis.value}", quote_bar_price=basis)
     first = next(iter(p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, **MARCH))))
@@ -129,10 +135,16 @@ def test_price_basis_selects_the_side(
 
 def test_timeframe_comes_from_the_request(quote_only: Path, tmp_path: Path) -> None:
     """Tick data has no natural spacing, so the caller names the bar width."""
-    minutes = list(provider(quote_only, tmp_path / "m").stream_bars(
-        request_for("MSFT", timeframe=Timeframe.M1, **MARCH)))
-    seconds = list(provider(quote_only, tmp_path / "s").stream_bars(
-        request_for("MSFT", timeframe=Timeframe.S1, **MARCH)))
+    minutes = list(
+        provider(quote_only, tmp_path / "m").stream_bars(
+            request_for("MSFT", timeframe=Timeframe.M1, **MARCH)
+        )
+    )
+    seconds = list(
+        provider(quote_only, tmp_path / "s").stream_bars(
+            request_for("MSFT", timeframe=Timeframe.S1, **MARCH)
+        )
+    )
     assert len(minutes) == 2
     assert len(seconds) == 5, "five distinct seconds carry a quote"
     assert all(b.timeframe is Timeframe.S1 for b in seconds)
@@ -190,8 +202,11 @@ def test_quote_only_directory_of_session_files(tmp_path: Path) -> None:
     root.mkdir()
     days = [date(2023, 3, d) for d in (6, 7, 8, 9, 10)]
     for day in days:
-        write_quotes(root / f"{day.isoformat()}.csv", day,
-                     [(1, 99.0, 101.0), (30, 100.0, 102.0), (90, 101.0, 103.0)])
+        write_quotes(
+            root / f"{day.isoformat()}.csv",
+            day,
+            [(1, 99.0, 101.0), (30, 100.0, 102.0), (90, 101.0, 103.0)],
+        )
 
     p = provider(root, tmp_path / "c")
     bars = list(p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, **MARCH)))
@@ -201,8 +216,9 @@ def test_quote_only_directory_of_session_files(tmp_path: Path) -> None:
     assert {b.timestamp.date() for b in bars} == set(days)
 
     # Date pruning still applies to a quote-only dataset.
-    one_day = request_for("MSFT", timeframe=Timeframe.M1,
-                          start=utc(2023, 3, 8), end=utc(2023, 3, 8, 23, 59))
+    one_day = request_for(
+        "MSFT", timeframe=Timeframe.M1, start=utc(2023, 3, 8), end=utc(2023, 3, 8, 23, 59)
+    )
     assert [f.stem for f in p._prune_files(one_day, kind=CsvFileKind.QUOTE)] == ["2023-03-08"]
     assert {b.timestamp.date() for b in p.stream_bars(one_day)} == {date(2023, 3, 8)}
 
@@ -215,7 +231,9 @@ def test_warmup_works_on_a_quote_only_dataset(tmp_path: Path) -> None:
 
     p = provider(root, tmp_path / "c")
     plain = request_for("MSFT", timeframe=Timeframe.M1, start=utc(2023, 3, 9), end=utc(2023, 3, 31))
-    warm = request_for("MSFT", timeframe=Timeframe.M1, start=utc(2023, 3, 9), end=utc(2023, 3, 31), warmup_bars=3)
+    warm = request_for(
+        "MSFT", timeframe=Timeframe.M1, start=utc(2023, 3, 9), end=utc(2023, 3, 31), warmup_bars=3
+    )
 
     assert len(p.load_series(Symbol("MSFT"), warm)) == len(p.load_series(Symbol("MSFT"), plain)) + 3
 
@@ -245,8 +263,7 @@ def test_shipped_quote_sample_alone_drives_bars(tmp_path: Path) -> None:
     shutil.copy(SAMPLES / "stock_quotes_sample.csv", root / "2023-03-28.csv")
 
     p = provider(root, tmp_path / "c")
-    req = request_for("MSFT", timeframe=Timeframe.M1,
-                      start=utc(2023, 3, 28), end=utc(2023, 3, 29))
+    req = request_for("MSFT", timeframe=Timeframe.M1, start=utc(2023, 3, 28), end=utc(2023, 3, 29))
     bars = list(p.stream_bars(req))
 
     assert len(bars) == 2, "the sample spans 08:00:00 to 08:01:07 -> two minute bars"
@@ -266,8 +283,7 @@ def test_a_quote_on_the_boundary_belongs_to_the_closing_bar(tmp_path: Path) -> N
     """
     root = tmp_path / "edge"
     root.mkdir()
-    write_quotes(root / "2023-03-08.csv", date(2023, 3, 8),
-                 [(60, 99.0, 101.0), (61, 105.0, 107.0)])
+    write_quotes(root / "2023-03-08.csv", date(2023, 3, 8), [(60, 99.0, 101.0), (61, 105.0, 107.0)])
 
     p = provider(root, tmp_path / "c")
     bars = list(p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, **MARCH)))

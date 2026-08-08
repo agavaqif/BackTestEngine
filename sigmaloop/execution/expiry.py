@@ -129,5 +129,7 @@ class StandardExpiryEngine(ExpiryEngine):
         """Underlying's official close on the expiry date."""
         raise NotImplementedError
 
-    def _resolve_at(self, position: Position, underlying_price: Price, at: UtcDatetime) -> ExpiryOutcome:
+    def _resolve_at(
+        self, position: Position, underlying_price: Price, at: UtcDatetime
+    ) -> ExpiryOutcome:
         raise NotImplementedError

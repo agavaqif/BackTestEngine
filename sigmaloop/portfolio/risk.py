@@ -151,15 +151,11 @@ class MarginCalculator(ABC):
     """Computes margin requirements for positions and prospective orders."""
 
     @abstractmethod
-    def initial_margin(
-        self, instrument: Instrument, quantity: Quantity, price: Price
-    ) -> Money:
+    def initial_margin(self, instrument: Instrument, quantity: Quantity, price: Price) -> Money:
         raise NotImplementedError
 
     @abstractmethod
-    def maintenance_margin(
-        self, instrument: Instrument, quantity: Quantity, price: Price
-    ) -> Money:
+    def maintenance_margin(self, instrument: Instrument, quantity: Quantity, price: Price) -> Money:
         raise NotImplementedError
 
     @abstractmethod
@@ -186,14 +182,10 @@ class RegTMarginCalculator(MarginCalculator):
     ) -> None:
         raise NotImplementedError
 
-    def initial_margin(
-        self, instrument: Instrument, quantity: Quantity, price: Price
-    ) -> Money:
+    def initial_margin(self, instrument: Instrument, quantity: Quantity, price: Price) -> Money:
         raise NotImplementedError
 
-    def maintenance_margin(
-        self, instrument: Instrument, quantity: Quantity, price: Price
-    ) -> Money:
+    def maintenance_margin(self, instrument: Instrument, quantity: Quantity, price: Price) -> Money:
         raise NotImplementedError
 
     def buying_power(self, equity: Money, margin_used: Money) -> Money:

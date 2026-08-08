@@ -425,7 +425,9 @@ class _NameHint:
 # Filename heuristics
 # --------------------------------------------------------------------------- #
 
-_DATE_IN_NAME = re.compile(r"(?<!\d)(19|20)(\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
+_DATE_IN_NAME = re.compile(
+    r"(?<!\d)(19|20)(\d{2})[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)"
+)
 #: Upper-case only: ``MSFT.csv`` is a ticker by convention, ``universe.csv`` is
 #: not. Guessing wrong here would prune real data, so the bar is set high.
 _TICKER_STEM = re.compile(r"^[A-Z][A-Z0-9]{0,5}(?:[.\-][A-Z0-9]{1,3})?$")
@@ -437,7 +439,9 @@ def _name_hint(path: Path) -> _NameHint:
     match = _DATE_IN_NAME.search(stem)
     if match is not None:
         try:
-            day = date(int(match.group(1) + match.group(2)), int(match.group(3)), int(match.group(4)))
+            day = date(
+                int(match.group(1) + match.group(2)), int(match.group(3)), int(match.group(4))
+            )
         except ValueError:
             day = None
     remainder = _DATE_IN_NAME.sub("", stem).strip(" _-.")
@@ -491,7 +495,9 @@ def _conversion_pool(max_workers: int) -> ThreadPoolExecutor:
         return _CONVERSION_POOL
 
 
-def _group_rows_by_code(codes: npt.NDArray[np.int64], group_count: int) -> list[npt.NDArray[np.int64]]:
+def _group_rows_by_code(
+    codes: npt.NDArray[np.int64], group_count: int
+) -> list[npt.NDArray[np.int64]]:
     """Row indices belonging to each symbol code.
 
     One stable sort for the whole table, then a slice per symbol. Testing
@@ -556,7 +562,9 @@ class _TimestampNormaliser:
         self._config = config
         self._source = source
 
-    def normalise(self, column: pa.ChunkedArray | pa.Array) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.bool_]]:
+    def normalise(
+        self, column: pa.ChunkedArray | pa.Array
+    ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.bool_]]:
         """Return ``(epoch_ns, valid_mask)``."""
         import pyarrow as pa_
 
@@ -583,7 +591,12 @@ class _TimestampNormaliser:
     ) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.bool_]]:
         unit = self._config.epoch_unit
         if unit is not EpochUnit.AUTO:
-            factor = {EpochUnit.SECONDS: 9, EpochUnit.MILLIS: 6, EpochUnit.MICROS: 3, EpochUnit.NANOS: 0}[unit]
+            factor = {
+                EpochUnit.SECONDS: 9,
+                EpochUnit.MILLIS: 6,
+                EpochUnit.MICROS: 3,
+                EpochUnit.NANOS: 0,
+            }[unit]
             scaled = _apply_shift(values, factor)
             return scaled, values > 0
 
@@ -655,7 +668,9 @@ class _TimestampNormaliser:
                 self._source,
             )
         if still_bad.any():
-            _LOG.warning("Dropping %d unrecoverable timestamp(s) in %s", int(still_bad.sum()), self._source)
+            _LOG.warning(
+                "Dropping %d unrecoverable timestamp(s) in %s", int(still_bad.sum()), self._source
+            )
         return repaired, ~still_bad
 
     # -- textual and native timestamps ------------------------------------- #
@@ -831,7 +846,9 @@ class CsvDataProvider(DataProvider):
 
     # ---- discovery -------------------------------------------------------- #
 
-    def resolve_instrument(self, symbol: Symbol, asset_class: AssetClass = AssetClass.EQUITY) -> Instrument:
+    def resolve_instrument(
+        self, symbol: Symbol, asset_class: AssetClass = AssetClass.EQUITY
+    ) -> Instrument:
         ticker = Symbol(str(symbol).strip().upper())
         return Equity(
             instrument_id=Equity.make_id(ticker),
@@ -851,13 +868,13 @@ class CsvDataProvider(DataProvider):
             symbols.update(entry.symbols)
         return tuple(sorted(symbols))
 
-    def coverage(self, symbol: Symbol, timeframe: Timeframe) -> tuple[UtcDatetime, UtcDatetime] | None:
+    def coverage(
+        self, symbol: Symbol, timeframe: Timeframe
+    ) -> tuple[UtcDatetime, UtcDatetime] | None:
         ticker = Symbol(str(symbol).upper())
         self._ensure_indexed(self._discover_files())
         spans = [
-            (e.min_ts, e.max_ts)
-            for e in self._index.values()
-            if ticker in e.symbols and e.rows
+            (e.min_ts, e.max_ts) for e in self._index.values() if ticker in e.symbols and e.rows
         ]
         if not spans:
             return None
@@ -873,12 +890,16 @@ class CsvDataProvider(DataProvider):
                 found = [config.path]
             else:
                 pattern = config.file_glob
-                paths = config.path.rglob(pattern) if config.recursive else config.path.glob(pattern)
+                paths = (
+                    config.path.rglob(pattern) if config.recursive else config.path.glob(pattern)
+                )
                 cache_root = self._cache_root().resolve()
                 found = sorted(
                     p
                     for p in paths
-                    if p.is_file() and cache_root not in p.resolve().parents and not p.name.startswith(".")
+                    if p.is_file()
+                    and cache_root not in p.resolve().parents
+                    and not p.name.startswith(".")
                 )
             if not found:
                 raise DataProviderError(
@@ -950,7 +971,10 @@ class CsvDataProvider(DataProvider):
             return None
         if entry.size != stat.st_size or entry.mtime_ns != stat.st_mtime_ns:
             return None
-        if entry.parquet is not None and not (self._cache_root() / "files" / entry.parquet).exists():
+        if (
+            entry.parquet is not None
+            and not (self._cache_root() / "files" / entry.parquet).exists()
+        ):
             return None
         return entry
 
@@ -1011,7 +1035,9 @@ class CsvDataProvider(DataProvider):
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
                 row = next(csv.reader(handle, delimiter=self._config.delimiter), None)
         except OSError as exc:
-            raise DataProviderError(self.name, f"Cannot read {path}: {exc}", path=str(path)) from exc
+            raise DataProviderError(
+                self.name, f"Cannot read {path}: {exc}", path=str(path)
+            ) from exc
         if not row or not any(c.strip() for c in row):
             raise DataIntegrityError("File is empty — no header row.", file=str(path))
         return row
@@ -1085,10 +1111,16 @@ class CsvDataProvider(DataProvider):
             )
         if has_ohlc:
             kind = CsvFileKind.AGGREGATE
-            roles = {k: v for k, v in roles.items() if k not in {"bid", "ask", "bid_size", "ask_size"}}
+            roles = {
+                k: v for k, v in roles.items() if k not in {"bid", "ask", "bid_size", "ask_size"}
+            }
         else:
             kind = CsvFileKind.QUOTE
-            roles = {k: v for k, v in roles.items() if k in {"timestamp", "symbol", "bid", "ask", "bid_size", "ask_size"}}
+            roles = {
+                k: v
+                for k, v in roles.items()
+                if k in {"timestamp", "symbol", "bid", "ask", "bid_size", "ask_size"}
+            }
         return _Schema(kind, roles, self._resolve_left_labelled(roles.get("timestamp")))
 
     def _resolve_left_labelled(self, timestamp_column: str | None) -> bool:
@@ -1135,7 +1167,11 @@ class CsvDataProvider(DataProvider):
         symbols = (
             tuple(sorted(pc.unique(table.column("symbol")).to_pylist())) if table.num_rows else ()
         )
-        ts = table.column("ts").to_numpy(zero_copy_only=False) if table.num_rows else np.empty(0, np.int64)
+        ts = (
+            table.column("ts").to_numpy(zero_copy_only=False)
+            if table.num_rows
+            else np.empty(0, np.int64)
+        )
         timeframe = self._infer_timeframe(table) if schema.kind is CsvFileKind.AGGREGATE else None
 
         self._warn_on_hint_mismatch(path, symbols, ts)
@@ -1174,7 +1210,9 @@ class CsvDataProvider(DataProvider):
                 self._tables[str(path)] = table
         return entry
 
-    def _warn_on_hint_mismatch(self, path: Path, symbols: tuple[str, ...], ts: npt.NDArray[np.int64]) -> None:
+    def _warn_on_hint_mismatch(
+        self, path: Path, symbols: tuple[str, ...], ts: npt.NDArray[np.int64]
+    ) -> None:
         if not self._config.trust_filename_hints:
             return
         hint = _name_hint(path)
@@ -1205,7 +1243,19 @@ class CsvDataProvider(DataProvider):
 
         roles = dict(schema.roles)
         wanted = list(dict.fromkeys(roles.values()))
-        numeric_roles = ("open", "high", "low", "close", "volume", "vwap", "bid", "ask", "bid_size", "ask_size", "adjusted_close")
+        numeric_roles = (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "vwap",
+            "bid",
+            "ask",
+            "bid_size",
+            "ask_size",
+            "adjusted_close",
+        )
         column_types = {roles[r]: pa_.float64() for r in numeric_roles if r in roles}
         if "symbol" in roles:
             column_types[roles["symbol"]] = pa_.string()
@@ -1224,7 +1274,9 @@ class CsvDataProvider(DataProvider):
                 f"Could not parse {path.name}: {exc}", file=str(path), columns=wanted
             ) from exc
 
-        ts, valid = _TimestampNormaliser(self._config, path).normalise(raw.column(roles["timestamp"]))
+        ts, valid = _TimestampNormaliser(self._config, path).normalise(
+            raw.column(roles["timestamp"])
+        )
 
         n = raw.num_rows
         symbol_values = self._symbol_column(raw, roles, path, n)
@@ -1240,7 +1292,12 @@ class CsvDataProvider(DataProvider):
                 columns["vwap"] = self._float_column(raw, roles, "vwap", n)
             valid = valid & self._ohlc_valid(columns, path)
         else:
-            for role, out in (("bid", "bid"), ("ask", "ask"), ("bid_size", "bid_size"), ("ask_size", "ask_size")):
+            for role, out in (
+                ("bid", "bid"),
+                ("ask", "ask"),
+                ("bid_size", "bid_size"),
+                ("ask_size", "ask_size"),
+            ):
                 columns[out] = self._float_column(raw, roles, role, n)
             if self._config.drop_invalid_quotes:
                 bid, ask = columns["bid"], columns["ask"]
@@ -1260,7 +1317,9 @@ class CsvDataProvider(DataProvider):
             table = table.filter(pa_.array(valid))
         return table.sort_by([("ts", "ascending"), ("symbol", "ascending")])
 
-    def _symbol_column(self, raw: pa.Table, roles: Mapping[str, str], path: Path, n: int) -> pa.Array:
+    def _symbol_column(
+        self, raw: pa.Table, roles: Mapping[str, str], path: Path, n: int
+    ) -> pa.Array:
         """Upper-cased tickers, left as an Arrow array.
 
         Materialising these as Python strings is the single most expensive
@@ -1289,16 +1348,22 @@ class CsvDataProvider(DataProvider):
     ) -> npt.NDArray[np.float64]:
         if role not in roles:
             return np.zeros(n, dtype=np.float64)
-        values = np.asarray(raw.column(roles[role]).to_numpy(zero_copy_only=False), dtype=np.float64)
+        values = np.asarray(
+            raw.column(roles[role]).to_numpy(zero_copy_only=False), dtype=np.float64
+        )
         return np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def _ohlc_valid(self, columns: Mapping[str, npt.NDArray[Any]], path: Path) -> npt.NDArray[np.bool_]:
+    def _ohlc_valid(
+        self, columns: Mapping[str, npt.NDArray[Any]], path: Path
+    ) -> npt.NDArray[np.bool_]:
         """Vectorised form of ``Bar.__post_init__``, applied once at conversion."""
         o, h, l, c = (np.asarray(columns[k]) for k in ("open", "high", "low", "close"))
         ok = (l <= o) & (o <= h) & (l <= c) & (c <= h) & (l <= h) & np.isfinite(o) & np.isfinite(c)
         bad = int((~ok).sum())
         if bad:
-            _LOG.warning("Dropping %d row(s) in %s that violate low <= open/close <= high", bad, path)
+            _LOG.warning(
+                "Dropping %d row(s) in %s that violate low <= open/close <= high", bad, path
+            )
         return ok
 
     def _bar_width_ns(self, path: Path, ts: npt.NDArray[np.int64]) -> int:
@@ -1309,7 +1374,11 @@ class CsvDataProvider(DataProvider):
         """
         configured = self._config.timeframe
         if configured is not None:
-            return 0 if configured is Timeframe.TICK else int(configured.duration.total_seconds() * 1e9)
+            return (
+                0
+                if configured is Timeframe.TICK
+                else int(configured.duration.total_seconds() * 1e9)
+            )
         inferred = self._modal_spacing(ts)
         if inferred <= 0:
             # One bar per symbol per file (a daily per-session layout) leaves no
@@ -1380,7 +1449,11 @@ class CsvDataProvider(DataProvider):
         """
         import pyarrow.parquet as pq
 
-        filters = [("ts", ">=", start_ns), ("ts", "<=", end_ns), ("symbol", "in", set(map(str, symbols)))]
+        filters = [
+            ("ts", ">=", start_ns),
+            ("ts", "<=", end_ns),
+            ("symbol", "in", set(map(str, symbols))),
+        ]
         # Optional columns (adj_close, vwap) may exist in some files and not
         # others; asking for a missing one is an error, so narrow per file and
         # let the concatenation fill the gap with nulls.
@@ -1398,14 +1471,18 @@ class CsvDataProvider(DataProvider):
                 if refreshed is None or refreshed.parquet is None:
                     return None
                 table = pq.read_table(
-                    self._cache_root() / "files" / refreshed.parquet, columns=list(columns), filters=filters
+                    self._cache_root() / "files" / refreshed.parquet,
+                    columns=list(columns),
+                    filters=filters,
                 )
         else:
             cached = self._tables.get(entry.path)
             if cached is None:
                 cached = self._read_csv(Path(entry.path), self._schema_for(Path(entry.path)))
                 self._tables[entry.path] = cached
-            table = self._filter_in_memory(cached.select(list(columns)) if columns else cached, symbols, start_ns, end_ns)
+            table = self._filter_in_memory(
+                cached.select(list(columns)) if columns else cached, symbols, start_ns, end_ns
+            )
         return table if table.num_rows else None
 
     @staticmethod
@@ -1416,7 +1493,8 @@ class CsvDataProvider(DataProvider):
         import pyarrow.compute as pc
 
         mask = pc.and_(
-            pc.greater_equal(table.column("ts"), start_ns), pc.less_equal(table.column("ts"), end_ns)
+            pc.greater_equal(table.column("ts"), start_ns),
+            pc.less_equal(table.column("ts"), end_ns),
         )
         mask = pc.and_(
             mask, pc.is_in(table.column("symbol"), value_set=pa_.array([str(s) for s in symbols]))
@@ -1440,10 +1518,16 @@ class CsvDataProvider(DataProvider):
         """Concatenate, order and de-duplicate rows from several files."""
         import pyarrow as pa_
 
-        tables = [t for t in (self._load_file_table(e, symbols, start_ns, end_ns, columns) for e in entries) if t is not None]
+        tables = [
+            t
+            for t in (self._load_file_table(e, symbols, start_ns, end_ns, columns) for e in entries)
+            if t is not None
+        ]
         if not tables:
             return None
-        table = tables[0] if len(tables) == 1 else pa_.concat_tables(tables, promote_options="default")
+        table = (
+            tables[0] if len(tables) == 1 else pa_.concat_tables(tables, promote_options="default")
+        )
         if len(tables) > 1:
             table = table.sort_by([("ts", "ascending"), ("symbol", "ascending")])
         return self._deduplicate(table)
@@ -1490,7 +1574,11 @@ class CsvDataProvider(DataProvider):
         if request.warmup_bars <= 0 or not entries:
             return start_ns
         frame = self._timeframe_for(entries, request)
-        width = int(frame.duration.total_seconds() * 1e9) if frame is not Timeframe.TICK else _NS_PER_DAY
+        width = (
+            int(frame.duration.total_seconds() * 1e9)
+            if frame is not Timeframe.TICK
+            else _NS_PER_DAY
+        )
         floor_ns = min(e.min_ts for e in entries)
         needed = request.warmup_bars
 
@@ -1618,7 +1706,9 @@ class CsvDataProvider(DataProvider):
         return [
             e
             for e in indexed
-            if e.kind is CsvFileKind.AGGREGATE and e.overlaps(start_ns, end_ns) and (wanted & set(e.symbols))
+            if e.kind is CsvFileKind.AGGREGATE
+            and e.overlaps(start_ns, end_ns)
+            and (wanted & set(e.symbols))
         ]
 
     @staticmethod
@@ -1643,7 +1733,11 @@ class CsvDataProvider(DataProvider):
         width_ns = self._frame_width_ns(frame)
         # A derived bar already carries its own closing quote; running the
         # as-of reader over it as well would be redundant work.
-        quotes = _QuoteReader(self, request, frame) if request.include_quotes and not from_quotes else None
+        quotes = (
+            _QuoteReader(self, request, frame)
+            if request.include_quotes and not from_quotes
+            else None
+        )
         align = width_ns if from_quotes else 0
         if from_quotes:
             # Widen back to the start of the bar that contains start_ns, so the
@@ -1739,10 +1833,20 @@ class CsvDataProvider(DataProvider):
         ts = table.column("ts").to_numpy(zero_copy_only=False).astype(np.int64, copy=False)
         bid = table.column("bid").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
         ask = table.column("ask").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
-        bid_size = table.column("bid_size").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
-        ask_size = table.column("ask_size").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+        bid_size = (
+            table.column("bid_size").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+        )
+        ask_size = (
+            table.column("ask_size").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+        )
         basis = self._config.quote_bar_price
-        price = bid if basis is QuotePriceBasis.BID else ask if basis is QuotePriceBasis.ASK else (bid + ask) * 0.5
+        price = (
+            bid
+            if basis is QuotePriceBasis.BID
+            else ask
+            if basis is QuotePriceBasis.ASK
+            else (bid + ask) * 0.5
+        )
 
         codes, names = _symbol_codes(table)
         # Right-labelled close of the half-open interval (close - w, close].
@@ -1840,7 +1944,11 @@ class CsvDataProvider(DataProvider):
             for name in ("open", "high", "low", "close", "volume")
         ]
         if adjusted and "adj_close" in table.column_names:
-            adj = table.column("adj_close").to_numpy(zero_copy_only=False).astype(np.float64, copy=False)
+            adj = (
+                table.column("adj_close")
+                .to_numpy(zero_copy_only=False)
+                .astype(np.float64, copy=False)
+            )
             close = cols[3]
             # Rows from a file that had no adj_close arrive as null; those keep
             # their raw prices rather than being scaled by a NaN ratio.
@@ -1954,7 +2062,9 @@ class CsvDataProvider(DataProvider):
         return out
 
     @staticmethod
-    def _trim_warmup(ts: npt.NDArray[np.int64], start_ns: int, warmup_bars: int) -> npt.NDArray[np.int64]:
+    def _trim_warmup(
+        ts: npt.NDArray[np.int64], start_ns: int, warmup_bars: int
+    ) -> npt.NDArray[np.int64]:
         """Indices of the in-range bars plus exactly ``warmup_bars`` before them."""
         first = int(np.searchsorted(ts, start_ns, side="left"))
         keep_from = max(first - warmup_bars, 0)
@@ -1976,7 +2086,11 @@ class CsvDataProvider(DataProvider):
         columns = ("ts", "symbol", "bid", "ask", "bid_size", "ask_size")
         for slice_start, slice_end in self._slices(entries, start_ns, end_ns):
             active = [e for e in entries if e.overlaps(slice_start, slice_end)]
-            table = self._gather(active, request.symbols, slice_start, slice_end, columns) if active else None
+            table = (
+                self._gather(active, request.symbols, slice_start, slice_end, columns)
+                if active
+                else None
+            )
             if table is None:
                 continue
             ts = table.column("ts").to_numpy(zero_copy_only=False)
@@ -2038,7 +2152,9 @@ class _QuoteReader:
         max_age = provider._config.max_quote_age
         self._max_age_ns = None if max_age is None else int(max_age.total_seconds() * 1e9)
         self._frame_ns = (
-            int(frame.duration.total_seconds() * 1e9) if frame is not Timeframe.TICK else _NS_PER_DAY
+            int(frame.duration.total_seconds() * 1e9)
+            if frame is not Timeframe.TICK
+            else _NS_PER_DAY
         )
 
     def attach(

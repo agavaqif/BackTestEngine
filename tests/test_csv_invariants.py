@@ -49,7 +49,11 @@ def test_every_window_returns_exactly_the_bars_in_it(
     expected = sorted(d for d in days if start <= d <= end)
 
     p = provider(per_day_layout, tmp_path / f"c{first_day}-{length}")
-    req = request_for("MSFT", start=utc(start.year, start.month, start.day), end=utc(end.year, end.month, end.day, 23, 59))
+    req = request_for(
+        "MSFT",
+        start=utc(start.year, start.month, start.day),
+        end=utc(end.year, end.month, end.day, 23, 59),
+    )
     got = [b.timestamp.date() for b in p.stream_bars(req)]
 
     assert got == expected, "pruning must not drop or add a session"
@@ -73,7 +77,9 @@ def test_pruning_matches_the_unpruned_answer(per_day_layout: Path, tmp_path: Pat
 
 
 @pytest.mark.parametrize("chunk", [1, 2, 3, 7, 13, 1_000_000])
-def test_any_chunk_size_yields_the_same_stream(per_day_layout: Path, tmp_path: Path, chunk: int) -> None:
+def test_any_chunk_size_yields_the_same_stream(
+    per_day_layout: Path, tmp_path: Path, chunk: int
+) -> None:
     req = request_for("MSFT", "AAPL", **MARCH)
     reference = provider(per_day_layout, tmp_path / "ref", stream_chunk_rows=1_000_000)
     sliced = provider(per_day_layout, tmp_path / f"c{chunk}", stream_chunk_rows=chunk)
@@ -189,7 +195,9 @@ def test_quote_never_precedes_a_bar_it_should_not_see(tmp_path: Path) -> None:
     ).to_csv(root / "quotes.csv", index=False)
 
     p = provider(root, tmp_path / "c", timeframe=Timeframe.M1)
-    bars = list(p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, include_quotes=True, **MARCH)))
+    bars = list(
+        p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, include_quotes=True, **MARCH))
+    )
     assert bars[0].quote is not None
     assert bars[0].quote.bid == pytest.approx(10.0), "the +1ns quote must not be visible"
 
@@ -238,7 +246,15 @@ def test_column_map_change_does_not_reuse_the_cache(tmp_path: Path, days: list[d
     remapped = provider(
         root,
         cache,
-        columns=CsvColumnMap(timestamp="date", symbol="ticker", open="open", high="high", low="low", close="alt_close", volume="volume"),
+        columns=CsvColumnMap(
+            timestamp="date",
+            symbol="ticker",
+            open="open",
+            high="high",
+            low="low",
+            close="alt_close",
+            volume="volume",
+        ),
     )
     a = next(iter(default.stream_bars(request_for("MSFT", **MARCH))))
     b = next(iter(remapped.stream_bars(request_for("MSFT", **MARCH))))
@@ -279,7 +295,15 @@ def test_all_zero_timestamp_column_is_rejected(tmp_path: Path) -> None:
     root = tmp_path / "zeros"
     root.mkdir()
     pd.DataFrame(
-        {"ticker": "MSFT", "window_start": [0, 0, 0], "open": [1.0] * 3, "high": [1.0] * 3, "low": [1.0] * 3, "close": [1.0] * 3, "volume": [1] * 3}
+        {
+            "ticker": "MSFT",
+            "window_start": [0, 0, 0],
+            "open": [1.0] * 3,
+            "high": [1.0] * 3,
+            "low": [1.0] * 3,
+            "close": [1.0] * 3,
+            "volume": [1] * 3,
+        }
     ).to_csv(root / "MSFT.csv", index=False)
     p = provider(root, tmp_path / "c")
     assert list(p.stream_bars(request_for("MSFT", **MARCH))) == []
@@ -296,9 +320,9 @@ def test_parallel_conversion_is_deterministic(tmp_path: Path, workers: int) -> N
     root.mkdir()
     all_days = business_days(date(2023, 3, 1), 30)
     for day in all_days:
-        pd.concat([daily_frame(s, [day], 100 + i) for i, s in enumerate(("MSFT", "AAPL", "NVDA"))]).to_csv(
-            root / f"{day.isoformat()}.csv", index=False
-        )
+        pd.concat(
+            [daily_frame(s, [day], 100 + i) for i, s in enumerate(("MSFT", "AAPL", "NVDA"))]
+        ).to_csv(root / f"{day.isoformat()}.csv", index=False)
 
     p = provider(root, tmp_path / f"c{workers}", max_workers=workers)
     assert sorted(p.available_symbols()) == ["AAPL", "MSFT", "NVDA"]

@@ -175,9 +175,7 @@ class Portfolio(PortfolioView):
         raise NotImplementedError
 
     @abstractmethod
-    def liquidate_all(
-        self, snapshot: MarketSnapshot, reason: TradeCloseReason
-    ) -> Sequence[Trade]:
+    def liquidate_all(self, snapshot: MarketSnapshot, reason: TradeCloseReason) -> Sequence[Trade]:
         """Flatten everything at the final bar so the trade log has no open legs."""
         raise NotImplementedError
 
@@ -303,9 +301,7 @@ class LedgerPortfolio(Portfolio):
     def mark_to_market(self, snapshot: MarketSnapshot) -> EquityPoint:
         raise NotImplementedError
 
-    def liquidate_all(
-        self, snapshot: MarketSnapshot, reason: TradeCloseReason
-    ) -> Sequence[Trade]:
+    def liquidate_all(self, snapshot: MarketSnapshot, reason: TradeCloseReason) -> Sequence[Trade]:
         raise NotImplementedError
 
     @property

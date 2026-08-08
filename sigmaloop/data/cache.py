@@ -27,7 +27,14 @@ from sigmaloop.domain.bar import BarSeries
 from sigmaloop.types import InstrumentId, Symbol, Timeframe
 from sigmaloop.utils.timeutil import to_epoch_ns
 
-__all__ = ["CacheKey", "CacheStats", "DataCache", "MemoryDataCache", "ParquetDataCache", "TieredDataCache"]
+__all__ = [
+    "CacheKey",
+    "CacheStats",
+    "DataCache",
+    "MemoryDataCache",
+    "ParquetDataCache",
+    "TieredDataCache",
+]
 
 #: Bumped whenever the on-disk column layout *or the key* changes, so an old
 #: cache is ignored rather than misread. v2 added ``asset_class`` and
@@ -312,7 +319,9 @@ class ParquetDataCache(DataCache):
         return self._stats
 
 
-def write_atomic(table: object, path: Path, *, compression: str = "zstd", row_group_size: int | None = None) -> None:
+def write_atomic(
+    table: object, path: Path, *, compression: str = "zstd", row_group_size: int | None = None
+) -> None:
     """Write ``table`` to ``path`` so readers never observe a partial file.
 
     The temp name carries the pid so that two processes converting the same

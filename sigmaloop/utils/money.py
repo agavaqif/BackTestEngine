@@ -40,7 +40,9 @@ def round_to_tick(price: Price, tick_size: Price, mode: str = "nearest") -> Pric
     raise NotImplementedError
 
 
-def round_to_lot(quantity: Quantity, lot_size: Quantity, allow_fractional: bool = False) -> Quantity:
+def round_to_lot(
+    quantity: Quantity, lot_size: Quantity, allow_fractional: bool = False
+) -> Quantity:
     """Floor toward zero to a valid lot multiple.
 
     Floor, not round: rounding up would let a sizer spend more capital than the

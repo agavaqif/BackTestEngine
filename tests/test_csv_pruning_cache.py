@@ -68,7 +68,11 @@ def test_pruning_does_not_drop_boundary_data(per_day_layout: Path, tmp_path: Pat
     everything = list(p.stream_bars(request_for("MSFT", **MARCH)))
     assert len(everything) == 20
     for day in (date(2023, 3, 1), date(2023, 3, 15), date(2023, 3, 28)):
-        req = request_for("MSFT", start=utc(day.year, day.month, day.day), end=utc(day.year, day.month, day.day, 23, 59))
+        req = request_for(
+            "MSFT",
+            start=utc(day.year, day.month, day.day),
+            end=utc(day.year, day.month, day.day, 23, 59),
+        )
         assert [b.timestamp.date() for b in p.stream_bars(req)] == [day]
 
 
@@ -79,7 +83,9 @@ def test_filename_hints_can_be_disabled(wide_layout: Path, tmp_path: Path) -> No
     assert {b.instrument_id for b in bars} == {"EQ:MSFT"}, "results are identical either way"
 
 
-def test_misleading_filename_warns(tmp_path: Path, days: list[date], caplog: pytest.LogCaptureFixture) -> None:
+def test_misleading_filename_warns(
+    tmp_path: Path, days: list[date], caplog: pytest.LogCaptureFixture
+) -> None:
     root = tmp_path / "liar"
     root.mkdir()
     daily_frame("AAPL", days, 200).to_csv(root / "MSFT.csv", index=False)
@@ -129,7 +135,9 @@ def test_cache_invalidated_when_source_changes(tmp_path: Path, days: list[date])
     daily_frame("MSFT", extended, 100).to_csv(root / "MSFT.csv", index=False)
 
     p2 = provider(root, cache)
-    assert len(list(p2.stream_bars(request_for("MSFT", **MARCH)))) == 22, "stale Parquet must not win"
+    assert len(list(p2.stream_bars(request_for("MSFT", **MARCH)))) == 22, (
+        "stale Parquet must not win"
+    )
     p2.close()
 
 
@@ -142,9 +150,15 @@ def test_different_interpretations_do_not_share_a_cache(tmp_path: Path, days: li
     frame["date"] = [f"{d.isoformat()} 16:00:00" for d in days]
     frame.to_csv(root / "MSFT.csv", index=False)
 
-    utc_bar = next(iter(provider(root, cache, source_timezone="UTC").stream_bars(request_for("MSFT", **MARCH))))
+    utc_bar = next(
+        iter(provider(root, cache, source_timezone="UTC").stream_bars(request_for("MSFT", **MARCH)))
+    )
     ny_bar = next(
-        iter(provider(root, cache, source_timezone="America/New_York").stream_bars(request_for("MSFT", **MARCH)))
+        iter(
+            provider(root, cache, source_timezone="America/New_York").stream_bars(
+                request_for("MSFT", **MARCH)
+            )
+        )
     )
     assert utc_bar.timestamp.hour == 16
     assert ny_bar.timestamp.hour == 21
@@ -310,7 +324,11 @@ def test_warmup_is_capped_by_available_history(wide_layout: Path, tmp_path: Path
 def test_warmup_applies_to_streaming(wide_layout: Path, tmp_path: Path) -> None:
     p = provider(wide_layout, tmp_path / "c")
     plain = list(p.stream_bars(request_for("MSFT", start=utc(2023, 3, 15), end=utc(2023, 3, 31))))
-    warm = list(p.stream_bars(request_for("MSFT", start=utc(2023, 3, 15), end=utc(2023, 3, 31), warmup_bars=4)))
+    warm = list(
+        p.stream_bars(
+            request_for("MSFT", start=utc(2023, 3, 15), end=utc(2023, 3, 31), warmup_bars=4)
+        )
+    )
     assert len(warm) == len(plain) + 4
     assert warm[0].timestamp < plain[0].timestamp
 
@@ -367,7 +385,9 @@ def test_small_series_stay_out_of_the_disk_tier(per_day_layout: Path, tmp_path: 
     p.load_many(request_for("MSFT", "AAPL", **MARCH))
     p.close()
 
-    assert list((cache / "files").glob("*.parquet")), "the per-file conversion cache is still written"
+    assert list((cache / "files").glob("*.parquet")), (
+        "the per-file conversion cache is still written"
+    )
     assert not list((cache / "series").rglob("*.parquet")), "20-row series are memory-only"
 
 
@@ -410,7 +430,9 @@ def test_left_labelled_without_inferable_width_warns(
     root.mkdir()
     for day in (date(2023, 3, 1), date(2023, 3, 2)):
         frame = daily_frame("MSFT", [day], 100).rename(columns={"date": "window_start"})
-        frame["window_start"] = [int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp())]
+        frame["window_start"] = [
+            int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp())
+        ]
         frame.to_csv(root / f"{day.isoformat()}.csv", index=False)
 
     p = provider(root, tmp_path / "c")
@@ -477,7 +499,8 @@ def test_warmup_larger_than_history_is_capped_not_broken(tmp_path: Path) -> None
 
     p = provider(root, tmp_path / "c")
     series = p.load_series(
-        Symbol("MSFT"), request_for("MSFT", start=utc(2023, 3, 13), end=utc(2023, 3, 31), warmup_bars=500)
+        Symbol("MSFT"),
+        request_for("MSFT", start=utc(2023, 3, 13), end=utc(2023, 3, 31), warmup_bars=500),
     )
     assert len(series) == len(days), "everything available, and no error"
 
@@ -501,6 +524,7 @@ def test_no_warmup_still_prunes_tightly(tmp_path: Path) -> None:
 def test_the_key_separates_two_asset_classes_on_one_ticker() -> None:
     """A ticker is not unique across asset classes, and the class routes to a
     different provider and a different instrument_id."""
+
     def request(asset_class: AssetClass) -> DataRequest:
         return DataRequest(
             symbols=(Symbol("SPY"),),
@@ -520,7 +544,10 @@ def test_the_key_separates_two_asset_classes_on_one_ticker() -> None:
 def test_the_key_separates_two_revisions_of_the_same_source() -> None:
     """Without this the disk tier outlives the data it describes."""
     request = DataRequest(
-        symbols=(Symbol("MSFT"),), start=utc(2023, 3, 1), end=utc(2023, 3, 31), timeframe=Timeframe.D1
+        symbols=(Symbol("MSFT"),),
+        start=utc(2023, 3, 1),
+        end=utc(2023, 3, 31),
+        timeframe=Timeframe.D1,
     )
     before = CacheKey.from_request("csv", Symbol("MSFT"), request, "digest-of-revision-1")
     after = CacheKey.from_request("csv", Symbol("MSFT"), request, "digest-of-revision-2")
@@ -529,7 +556,9 @@ def test_the_key_separates_two_revisions_of_the_same_source() -> None:
     assert before.digest() != after.digest()
 
 
-def test_an_edited_csv_is_not_served_from_the_previous_run(tmp_path: Path, days: list[date]) -> None:
+def test_an_edited_csv_is_not_served_from_the_previous_run(
+    tmp_path: Path, days: list[date]
+) -> None:
     """load_series' disk tier survives the process, so a second run over an
     edited file was answered with the first run's bars."""
     root, cache = tmp_path / "mut", tmp_path / "c"

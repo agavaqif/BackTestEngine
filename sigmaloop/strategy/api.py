@@ -140,7 +140,9 @@ class OptionStructure:
         raise NotImplementedError
 
     @classmethod
-    def strangle(cls, target_delta: float = 0.20, dte: int = 0, short: bool = False) -> OptionStructure:
+    def strangle(
+        cls, target_delta: float = 0.20, dte: int = 0, short: bool = False
+    ) -> OptionStructure:
         """The requirement's "SPY 0DTE 20-delta put and call"."""
         raise NotImplementedError
 

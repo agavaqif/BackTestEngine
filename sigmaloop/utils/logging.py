@@ -43,7 +43,15 @@ class LogRecord:
 class RunLogger:
     """Logger bound to one run's clock and diagnostics buffer."""
 
-    __slots__ = ("_logger", "_clock", "_records", "_level", "_capture", "_max_records", "_suppressed")
+    __slots__ = (
+        "_logger",
+        "_clock",
+        "_records",
+        "_level",
+        "_capture",
+        "_max_records",
+        "_suppressed",
+    )
 
     def __init__(
         self,

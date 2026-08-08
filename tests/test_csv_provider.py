@@ -41,7 +41,9 @@ def test_capabilities(minute_sample: Path, tmp_path: Path) -> None:
 
 
 def test_resolve_instrument(minute_sample: Path, tmp_path: Path) -> None:
-    instrument = provider(minute_sample, tmp_path / "c").resolve_instrument(Symbol("msft"), AssetClass.EQUITY)
+    instrument = provider(minute_sample, tmp_path / "c").resolve_instrument(
+        Symbol("msft"), AssetClass.EQUITY
+    )
     assert instrument.instrument_id == "EQ:MSFT"
     assert instrument.symbol == "MSFT"
     assert instrument.multiplier == 1.0
@@ -150,7 +152,9 @@ def test_wide_layout_without_symbol_column_uses_filename(tmp_path: Path, days: l
 def test_symbol_column_absent_and_filename_unusable(tmp_path: Path, days: list[date]) -> None:
     root = tmp_path / "anon"
     root.mkdir()
-    daily_frame("MSFT", days, 100).drop(columns=["ticker"]).to_csv(root / "prices export.csv", index=False)
+    daily_frame("MSFT", days, 100).drop(columns=["ticker"]).to_csv(
+        root / "prices export.csv", index=False
+    )
     p = provider(root, tmp_path / "c", source_timezone="UTC")
     with pytest.raises(DataIntegrityError, match="no symbol column"):
         p.available_symbols()
@@ -159,7 +163,9 @@ def test_symbol_column_absent_and_filename_unusable(tmp_path: Path, days: list[d
 def test_default_symbol_config(tmp_path: Path, days: list[date]) -> None:
     root = tmp_path / "anon2"
     root.mkdir()
-    daily_frame("MSFT", days, 100).drop(columns=["ticker"]).to_csv(root / "prices export.csv", index=False)
+    daily_frame("MSFT", days, 100).drop(columns=["ticker"]).to_csv(
+        root / "prices export.csv", index=False
+    )
     p = provider(root, tmp_path / "c", source_timezone="UTC", default_symbol=Symbol("MSFT"))
     assert p.available_symbols() == (Symbol("MSFT"),)
 
@@ -278,7 +284,9 @@ def test_stale_quotes_are_not_attached(samples_dir: Path, tmp_path: Path) -> Non
     from datetime import timedelta
 
     p = provider(samples_dir, tmp_path / "c", max_quote_age=timedelta(minutes=5))
-    bars = list(p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, include_quotes=True, **MARCH)))
+    bars = list(
+        p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, include_quotes=True, **MARCH))
+    )
     attached = [b for b in bars if b.quote is not None]
     assert 0 < len(attached) < len(bars)
     assert all(b.timestamp <= datetime(2023, 3, 28, 8, 6, tzinfo=UTC) for b in attached)
@@ -297,7 +305,13 @@ def test_autodetect_without_column_map(minute_sample: Path, tmp_path: Path) -> N
 
 def test_explicit_column_map(minute_sample: Path, tmp_path: Path) -> None:
     columns = CsvColumnMap(
-        timestamp="window_start", symbol="ticker", open="open", high="high", low="low", close="close", volume="volume"
+        timestamp="window_start",
+        symbol="ticker",
+        open="open",
+        high="high",
+        low="low",
+        close="close",
+        volume="volume",
     )
     p = provider(minute_sample, tmp_path / "c", columns=columns)
     assert len(list(p.stream_bars(request_for("MSFT", timeframe=Timeframe.M1, **MARCH)))) == 99
@@ -367,9 +381,16 @@ def test_drop_timestamp_policy(minute_sample: Path, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("scale", "unit"),
-    [(1, EpochUnit.SECONDS), (10**3, EpochUnit.MILLIS), (10**6, EpochUnit.MICROS), (10**9, EpochUnit.NANOS)],
+    [
+        (1, EpochUnit.SECONDS),
+        (10**3, EpochUnit.MILLIS),
+        (10**6, EpochUnit.MICROS),
+        (10**9, EpochUnit.NANOS),
+    ],
 )
-def test_epoch_units_autodetected(tmp_path: Path, days: list[date], scale: int, unit: EpochUnit) -> None:
+def test_epoch_units_autodetected(
+    tmp_path: Path, days: list[date], scale: int, unit: EpochUnit
+) -> None:
     root = tmp_path / f"epoch{scale}"
     root.mkdir()
     frame = daily_frame("MSFT", days, 100)
@@ -408,8 +429,12 @@ def test_left_labelled_shift(tmp_path: Path, days: list[date]) -> None:
     root.mkdir()
     daily_frame("MSFT", days, 100).to_csv(root / "MSFT.csv", index=False)
 
-    right = provider(root, tmp_path / "cr", source_timezone="UTC", left_labelled=False, timeframe=Timeframe.D1)
-    left = provider(root, tmp_path / "cl", source_timezone="UTC", left_labelled=True, timeframe=Timeframe.D1)
+    right = provider(
+        root, tmp_path / "cr", source_timezone="UTC", left_labelled=False, timeframe=Timeframe.D1
+    )
+    left = provider(
+        root, tmp_path / "cl", source_timezone="UTC", left_labelled=True, timeframe=Timeframe.D1
+    )
 
     right_first = next(iter(right.stream_bars(request_for("MSFT", **MARCH))))
     left_first = next(iter(left.stream_bars(request_for("MSFT", **MARCH))))
@@ -468,10 +493,14 @@ def test_adjustment_survives_files_with_mixed_schemas(tmp_path: Path, days: list
     daily_frame("AAPL", days, 200).to_csv(root / "AAPL.csv", index=False)
 
     p = provider(root, tmp_path / "c", source_timezone="UTC")
-    raw = {(b.instrument_id, b.timestamp): b.close for b in p.stream_bars(
-        request_for("MSFT", "AAPL", adjusted=False, **MARCH))}
-    adjusted = {(b.instrument_id, b.timestamp): b.close for b in p.stream_bars(
-        request_for("MSFT", "AAPL", adjusted=True, **MARCH))}
+    raw = {
+        (b.instrument_id, b.timestamp): b.close
+        for b in p.stream_bars(request_for("MSFT", "AAPL", adjusted=False, **MARCH))
+    }
+    adjusted = {
+        (b.instrument_id, b.timestamp): b.close
+        for b in p.stream_bars(request_for("MSFT", "AAPL", adjusted=True, **MARCH))
+    }
 
     assert raw and len(raw) == len(adjusted)
     for (instrument, stamp), close in raw.items():
