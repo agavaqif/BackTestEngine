@@ -136,6 +136,79 @@ def test_price_resolves_an_option_from_its_chain() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Option quotes and chains
+# --------------------------------------------------------------------------- #
+
+
+def option_quote(**overrides: object) -> OptionQuote:
+    contract = OptionContract(
+        instrument_id=InstrumentId("OPT:MSFT:20230421:C:00280000"),
+        symbol=Symbol("MSFT230421C00280000"),
+        underlying_id=MSFT,
+        underlying_symbol=Symbol("MSFT"),
+        right=OptionRight.CALL,
+        strike=280.0,
+        expiry=date(2023, 4, 21),
+    )
+    kwargs: dict[str, object] = {
+        "instrument_id": contract.instrument_id,
+        "contract": contract,
+        "timestamp": STAMP,
+        "quote": Quote(bid=2.0, ask=2.4),
+    }
+    kwargs.update(overrides)
+    return OptionQuote(**kwargs)  # type: ignore[arg-type]
+
+
+def test_an_option_quote_prices_from_its_own_book() -> None:
+    option = option_quote()
+
+    assert option.mid == pytest.approx(2.2)
+    assert option.price_for(PriceSelection.WORST, is_buy=True) == pytest.approx(2.4)
+    assert option.price_for(PriceSelection.WORST, is_buy=False) == pytest.approx(2.0)
+    assert option.price_for(PriceSelection.BEST, is_buy=True) == pytest.approx(2.0)
+
+
+def test_last_falls_back_to_the_mid_when_the_contract_never_printed() -> None:
+    """An untraded contract has no last, and a stale one is not a price anyone
+    could have transacted at."""
+    assert option_quote().price_for(PriceSelection.LAST, is_buy=True) == pytest.approx(2.2)
+    traded = option_quote(last=2.1)
+    assert traded.price_for(PriceSelection.LAST, is_buy=True) == pytest.approx(2.1)
+
+
+def test_delta_without_greeks_is_an_error_not_a_zero() -> None:
+    from sigmaloop.domain.bar import Greeks
+    from sigmaloop.errors import DataError
+
+    with pytest.raises(DataError, match="no greeks"):
+        _ = option_quote().delta
+    assert option_quote(greeks=Greeks(delta=0.42)).delta == pytest.approx(0.42)
+
+
+def test_dte_is_measured_from_the_quote_timestamp() -> None:
+    assert option_quote().days_to_expiry == 24
+    assert not option_quote().is_zero_dte
+    assert option_quote(timestamp=datetime(2023, 4, 21, 14, tzinfo=UTC)).is_zero_dte
+
+
+def test_a_chain_looks_its_contracts_up_by_id() -> None:
+    option = option_quote()
+    chain = OptionChain(
+        underlying_id=MSFT,
+        underlying_symbol=Symbol("MSFT"),
+        timestamp=STAMP,
+        underlying_price=275.0,
+        quotes=(option,),
+    )
+
+    assert len(chain) == 1
+    assert list(chain) == [option]
+    assert chain.get(option.instrument_id) is option
+    assert chain.get(InstrumentId("OPT:MSFT:20230421:P:00280000")) is None
+
+
+# --------------------------------------------------------------------------- #
 # Time
 # --------------------------------------------------------------------------- #
 

@@ -8,12 +8,14 @@ so cost attribution stays explicit in the trade log.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import ClassVar
 
 from sigmaloop.domain.bar import Bar
 from sigmaloop.domain.instrument import Instrument
+from sigmaloop.errors import ValidationError
 from sigmaloop.types import Basis, OrderSide, Price, Quantity
 
 __all__ = [
@@ -25,6 +27,19 @@ __all__ = [
     "VolumeShareSlippageModel",
     "SpreadFractionSlippageModel",
 ]
+
+#: One basis point as a fraction.
+_BPS = 1e-4
+
+
+def _require_non_negative(value: float, name: str, owner: str) -> float:
+    if not math.isfinite(value) or value < 0.0:
+        raise ValidationError(
+            f"{owner}.{name} must be a non-negative, finite number; negative "
+            "slippage is price improvement, which no honest backtest assumes.",
+            **{name: value},
+        )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +72,7 @@ class SlippageModel(ABC):
         enforce a participation limit, which is what prevents a backtest from
         "buying" more volume than the market printed.
         """
-        raise NotImplementedError
+        return context.quantity
 
 
 class NoSlippageModel(SlippageModel):
@@ -66,7 +81,7 @@ class NoSlippageModel(SlippageModel):
     name: ClassVar[str] = "none"
 
     def slippage_per_unit(self, context: SlippageContext) -> Price:
-        raise NotImplementedError
+        return 0.0
 
 
 class FixedBpsSlippageModel(SlippageModel):
@@ -75,10 +90,10 @@ class FixedBpsSlippageModel(SlippageModel):
     name: ClassVar[str] = "fixed_bps"
 
     def __init__(self, bps: Basis = 1.0) -> None:
-        raise NotImplementedError
+        self._bps = _require_non_negative(bps, "bps", type(self).__name__)
 
     def slippage_per_unit(self, context: SlippageContext) -> Price:
-        raise NotImplementedError
+        return abs(context.reference_price) * self._bps * _BPS
 
 
 class TickSlippageModel(SlippageModel):
@@ -87,10 +102,10 @@ class TickSlippageModel(SlippageModel):
     name: ClassVar[str] = "ticks"
 
     def __init__(self, ticks: float = 1.0) -> None:
-        raise NotImplementedError
+        self._ticks = _require_non_negative(ticks, "ticks", type(self).__name__)
 
     def slippage_per_unit(self, context: SlippageContext) -> Price:
-        raise NotImplementedError
+        return self._ticks * context.instrument.tick_size
 
 
 class VolumeShareSlippageModel(SlippageModel):
@@ -108,13 +123,31 @@ class VolumeShareSlippageModel(SlippageModel):
     name: ClassVar[str] = "volume_share"
 
     def __init__(self, coefficient: float = 0.1, max_volume_share: float = 0.025) -> None:
-        raise NotImplementedError
+        self._coefficient = _require_non_negative(coefficient, "coefficient", type(self).__name__)
+        self._max_volume_share = _require_non_negative(
+            max_volume_share, "max_volume_share", type(self).__name__
+        )
 
     def slippage_per_unit(self, context: SlippageContext) -> Price:
-        raise NotImplementedError
+        volume = context.bar.volume
+        price = abs(context.reference_price)
+        if volume <= 0.0:
+            # Nothing printed on this bar, so participation is undefined rather
+            # than zero. :meth:`fillable_quantity` refuses the fill outright;
+            # charging the full coefficient here keeps any caller that ignores
+            # the cap from reading "no volume" as "no cost".
+            return self._coefficient * price
+        # Capped at the participation limit before taking the root: the model
+        # only ever prices the slice it would actually let through, so an
+        # oversized order is not charged for impact the broker then truncates.
+        participating = min(abs(context.quantity), self._max_volume_share * volume)
+        return self._coefficient * price * math.sqrt(participating / volume)
 
     def fillable_quantity(self, context: SlippageContext) -> Quantity:
-        raise NotImplementedError
+        volume = context.bar.volume
+        if volume <= 0.0:
+            return 0.0
+        return min(context.quantity, self._max_volume_share * volume)
 
 
 class SpreadFractionSlippageModel(SlippageModel):
@@ -126,7 +159,15 @@ class SpreadFractionSlippageModel(SlippageModel):
     name: ClassVar[str] = "spread_fraction"
 
     def __init__(self, fraction: float = 0.5) -> None:
-        raise NotImplementedError
+        self._fraction = _require_non_negative(fraction, "fraction", type(self).__name__)
 
     def slippage_per_unit(self, context: SlippageContext) -> Price:
-        raise NotImplementedError
+        """Zero when the bar carries no book — there is no spread to take a
+        fraction of, and inventing one here would double-charge whatever the
+        spread model already applied at pricing time. The broker attaches the
+        quote it priced against (real or synthetic) to the bar it passes in, so
+        this is only reached when the run has no spread model at all."""
+        quote = context.bar.quote
+        if quote is None:
+            return 0.0
+        return max(quote.spread, 0.0) * self._fraction

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import ClassVar
 
-from sigmaloop.errors import ValidationError
+from sigmaloop.errors import InstrumentNotFoundError, ValidationError
 from sigmaloop.types import (
     AssetClass,
     Currency,
@@ -41,6 +41,12 @@ _QUANTITY_DECIMALS = 10
 #: Absorbs the representation error in e.g. 0.3 / 0.1 == 2.9999999999999996,
 #: which would otherwise floor a clean 3 lots down to 2.
 _LOT_EPSILON = 1e-9
+
+#: Fixed-width tail of an OCC option symbol: ``YYMMDD`` + right + 8-digit strike.
+#: Everything before it is the root, however it has been padded.
+_OCC_TAIL_WIDTH = 15
+
+_OCC_RIGHTS: dict[str, OptionRight] = {"C": OptionRight.CALL, "P": OptionRight.PUT}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -192,38 +198,134 @@ class OptionContract(Instrument):
 
     ID_PREFIX: ClassVar[str] = "OPT"
 
+    def __post_init__(self) -> None:
+        """Validate the base invariants, then the strike.
+
+        A non-positive strike is not merely odd data: :meth:`moneyness` divides
+        by it for puts, and an exercise at a zero strike would hand the account
+        free shares. Both failures are silent, so the contract refuses to exist.
+
+        The base is named explicitly rather than via ``super()``: ``slots=True``
+        rebuilds the dataclass as a new class object, leaving the zero-argument
+        form's ``__class__`` cell pointing at the pre-slots class it was
+        compiled against, which raises at construction time.
+        """
+        Instrument.__post_init__(self)
+        if not (math.isfinite(self.strike) and self.strike > 0.0):
+            raise ValidationError(
+                "OptionContract.strike must be a positive, finite price.",
+                symbol=self.symbol,
+                strike=self.strike,
+            )
+
     @classmethod
     def make_id(
         cls, underlying: Symbol, expiry: date, right: OptionRight, strike: Price
     ) -> InstrumentId:
         """Build ``"OPT:SPY:20250117:C:00500000"`` (strike scaled by 1000)."""
-        raise NotImplementedError
+        strike_thousandths = round(strike * 1000)
+        return InstrumentId(
+            f"{cls.ID_PREFIX}:{underlying.strip().upper()}:{expiry:%Y%m%d}:"
+            f"{'C' if right is OptionRight.CALL else 'P'}:{strike_thousandths:08d}"
+        )
 
     @classmethod
     def from_occ(cls, occ_symbol: str, **overrides: object) -> OptionContract:
-        """Parse a 21-character OCC symbol into a contract."""
-        raise NotImplementedError
+        """Parse an OCC symbol — ``"SPY   250117C00500000"`` — into a contract.
+
+        The inverse of :meth:`make_id`, and the shape every US options feed and
+        broker file names contracts in. The layout is fixed-width: 6 characters
+        of root, ``YYMMDD``, ``C`` or ``P``, then the strike in thousandths over
+        8 digits.
+
+        The root is read from what is left after the fixed 15-character tail
+        rather than from the first 6 columns, so a symbol whose padding has been
+        stripped in transit still parses. Two-digit years map to 2000-2099: the
+        format has no century and listed options do not predate it.
+
+        ``overrides`` reach the constructor untouched, which is how a caller
+        supplies the facts the symbol cannot carry — ``style``, ``settlement``,
+        a non-standard ``multiplier`` after an adjustment.
+        """
+        cleaned = occ_symbol.strip()
+        tail = cleaned[-_OCC_TAIL_WIDTH:]
+        root = cleaned[:-_OCC_TAIL_WIDTH].strip().upper()
+        if len(cleaned) <= _OCC_TAIL_WIDTH or not root:
+            raise ValidationError(
+                f"{occ_symbol!r} is not an OCC option symbol; expected a root "
+                "followed by YYMMDD, C or P, and an 8-digit strike in thousandths.",
+                occ_symbol=occ_symbol,
+            )
+        right_code = tail[6]
+        if right_code not in _OCC_RIGHTS:
+            raise ValidationError(
+                f"OCC symbol {occ_symbol!r} has right {right_code!r}; expected 'C' or 'P'.",
+                occ_symbol=occ_symbol,
+            )
+        try:
+            expiry = date(2000 + int(tail[0:2]), int(tail[2:4]), int(tail[4:6]))
+            strike_thousandths = int(tail[7:])
+        except ValueError as exc:
+            raise ValidationError(
+                f"OCC symbol {occ_symbol!r} carries an unparseable expiry or strike.",
+                occ_symbol=occ_symbol,
+            ) from exc
+
+        underlying = Symbol(root)
+        right = _OCC_RIGHTS[right_code]
+        strike = strike_thousandths / 1000.0
+        fields: dict[str, object] = {
+            "instrument_id": cls.make_id(underlying, expiry, right, strike),
+            "symbol": Symbol(cleaned),
+            "underlying_id": Equity.make_id(underlying),
+            "underlying_symbol": underlying,
+            "right": right,
+            "strike": strike,
+            "expiry": expiry,
+            "occ_symbol": cleaned,
+        }
+        fields.update(overrides)
+        return cls(**fields)  # type: ignore[arg-type]
 
     def days_to_expiry(self, as_of: UtcDatetime) -> int:
-        """Calendar days from ``as_of`` to :attr:`expiry` (0 == 0DTE)."""
-        raise NotImplementedError
+        """Calendar days from ``as_of`` to :attr:`expiry` (0 == 0DTE).
+
+        Negative once the contract is past expiry, rather than clamped at zero:
+        a caller filtering on ``dte <= 0`` must be able to tell "expires today"
+        from "expired last week".
+        """
+        return (self.expiry - as_of.date()).days
 
     def moneyness(self, underlying_price: Price) -> float:
-        """``underlying / strike`` for calls, ``strike / underlying`` for puts."""
-        raise NotImplementedError
+        """``underlying / strike`` for calls, ``strike / underlying`` for puts.
+
+        ``1.0`` is at-the-money and ``> 1.0`` is in-the-money for either right,
+        which is what lets a selector express "10% ITM" without branching.
+        """
+        if self.right is OptionRight.CALL:
+            return underlying_price / self.strike
+        if underlying_price <= 0.0:
+            # A worthless underlying makes every put infinitely in the money.
+            # Reporting that keeps the degenerate case visible; a zero would
+            # read as at-the-money and quietly select the wrong contract.
+            return math.inf
+        return self.strike / underlying_price
 
     def intrinsic_value(self, underlying_price: Price) -> Price:
         """Per-unit intrinsic value; 0 when out of the money."""
-        raise NotImplementedError
+        if self.right is OptionRight.CALL:
+            return max(underlying_price - self.strike, 0.0)
+        return max(self.strike - underlying_price, 0.0)
 
     def is_itm(self, underlying_price: Price) -> bool:
-        raise NotImplementedError
+        return self.intrinsic_value(underlying_price) > 0.0
 
     def notional(self, price: Price, quantity: Quantity) -> float:
-        raise NotImplementedError
+        return price * quantity * self.multiplier
 
     def is_expired(self, as_of: UtcDatetime) -> bool:
-        raise NotImplementedError
+        """False on the expiry date itself — the contract trades until its close."""
+        return as_of.date() > self.expiry
 
 
 class InstrumentRegistry:
@@ -238,28 +340,60 @@ class InstrumentRegistry:
     __slots__ = ("_by_id", "_by_symbol", "_options_by_underlying")
 
     def __init__(self) -> None:
-        raise NotImplementedError
+        self._by_id: dict[InstrumentId, Instrument] = {}
+        self._by_symbol: dict[Symbol, list[Instrument]] = {}
+        self._options_by_underlying: dict[InstrumentId, list[OptionContract]] = {}
 
     def register(self, instrument: Instrument) -> Instrument:
-        """Insert, or return the already-interned equal instance."""
-        raise NotImplementedError
+        """Insert, or return the already-interned equal instance.
+
+        Two different instruments claiming one id is refused rather than
+        overwritten: every position, order and fill in the run keys off that id,
+        and silently rebinding it would reprice holdings the strategy already
+        opened against the instrument it thought it had.
+        """
+        existing = self._by_id.get(instrument.instrument_id)
+        if existing is not None:
+            if existing == instrument:
+                return existing
+            raise ValidationError(
+                "Two different instruments claim the same instrument_id.",
+                instrument_id=instrument.instrument_id,
+                existing=existing.symbol,
+                incoming=instrument.symbol,
+            )
+        self._by_id[instrument.instrument_id] = instrument
+        self._by_symbol.setdefault(instrument.symbol, []).append(instrument)
+        if isinstance(instrument, OptionContract):
+            self._options_by_underlying.setdefault(instrument.underlying_id, []).append(instrument)
+        return instrument
 
     def get(self, instrument_id: InstrumentId) -> Instrument:
         """Look up by id; raises ``InstrumentNotFoundError`` if absent."""
-        raise NotImplementedError
+        found = self._by_id.get(instrument_id)
+        if found is None:
+            raise InstrumentNotFoundError(
+                f"No instrument registered under {instrument_id!r}. Instruments are "
+                "interned by the data layer as they are loaded; an id that reaches "
+                "the engine unregistered is a strategy referencing a symbol the run "
+                "never subscribed to.",
+                instrument_id=instrument_id,
+                registered=len(self._by_id),
+            )
+        return found
 
     def try_get(self, instrument_id: InstrumentId) -> Instrument | None:
-        raise NotImplementedError
+        return self._by_id.get(instrument_id)
 
     def by_symbol(self, symbol: Symbol) -> tuple[Instrument, ...]:
         """All instruments sharing a ticker (the equity plus its options)."""
-        raise NotImplementedError
+        return tuple(self._by_symbol.get(symbol, ()))
 
     def options_on(self, underlying_id: InstrumentId) -> tuple[OptionContract, ...]:
-        raise NotImplementedError
+        return tuple(self._options_by_underlying.get(underlying_id, ()))
 
     def __len__(self) -> int:
-        raise NotImplementedError
+        return len(self._by_id)
 
     def __contains__(self, instrument_id: object) -> bool:
-        raise NotImplementedError
+        return instrument_id in self._by_id

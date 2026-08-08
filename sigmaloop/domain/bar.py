@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import numpy as np
 
-from sigmaloop.errors import DataIntegrityError, DataNotAvailableError
+from sigmaloop.errors import DataError, DataIntegrityError, DataNotAvailableError
 from sigmaloop.types import (
     EpochNanos,
     InstrumentId,
@@ -218,23 +218,43 @@ class OptionQuote:
 
     @property
     def mid(self) -> Price:
-        raise NotImplementedError
+        return self.quote.mid
 
     @property
     def delta(self) -> float:
         """Signed delta; raises ``DataError`` if the feed supplied no greeks."""
-        raise NotImplementedError
+        if self.greeks is None:
+            raise DataError(
+                "This quote carries no greeks, so delta is unknown. Selecting by "
+                "delta needs a provider that publishes them (or a pricer); a "
+                "fabricated 0.0 would silently pick the wrong contract.",
+                instrument_id=self.instrument_id,
+                timestamp=self.timestamp.isoformat(),
+            )
+        return self.greeks.delta
 
     @property
     def days_to_expiry(self) -> int:
-        raise NotImplementedError
+        return self.contract.days_to_expiry(self.timestamp)
 
     @property
     def is_zero_dte(self) -> bool:
-        raise NotImplementedError
+        return self.days_to_expiry == 0
 
     def price_for(self, selection: PriceSelection, is_buy: bool) -> Price:
-        raise NotImplementedError
+        """Transaction price under ``selection``, mirroring :meth:`Bar.price_for`.
+
+        ``LAST`` falls back to the mid when the feed published no trade: an
+        option can go a whole session without printing, and a stale or absent
+        last is not a price anyone could have transacted at.
+        """
+        if selection is PriceSelection.LAST:
+            return self.quote.mid if self.last is None else self.last
+        if selection is PriceSelection.MID:
+            return self.quote.mid
+        if selection is PriceSelection.WORST:
+            return self.quote.ask if is_buy else self.quote.bid
+        return self.quote.bid if is_buy else self.quote.ask
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,13 +326,22 @@ class OptionChain:
         raise NotImplementedError
 
     def get(self, instrument_id: InstrumentId) -> OptionQuote | None:
-        raise NotImplementedError
+        """The chain's quote for one contract, or ``None`` if it is not quoted.
+
+        A linear scan: the execution layer calls this once per working option
+        order per bar, against a chain already narrowed by
+        ``OptionsConfig.strike_window_pct`` and the DTE bounds.
+        """
+        for quote in self.quotes:
+            if quote.instrument_id == instrument_id:
+                return quote
+        return None
 
     def __len__(self) -> int:
-        raise NotImplementedError
+        return len(self.quotes)
 
     def __iter__(self) -> Iterator[OptionQuote]:
-        raise NotImplementedError
+        return iter(self.quotes)
 
 
 @dataclass(frozen=True, slots=True)
